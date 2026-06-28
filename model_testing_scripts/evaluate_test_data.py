@@ -8,6 +8,10 @@ import seaborn as sns
 import xgboost as xgb
 from prophet.serialize import model_from_json
 import holidays
+import sys
+import os
+
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from data_utils import load_and_filter_data
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -148,10 +152,11 @@ def main():
     for i, (model_name, col_name) in enumerate(models.items()):
         error = results_df[col_name] - results_df["Actual Wait"]
         mae = np.abs(error).mean()
+        rmse = np.sqrt((error ** 2).mean())
         
         ax = axes[i]
         sns.histplot(error, kde=True, ax=ax, bins=50, color='steelblue', edgecolor='black', alpha=0.7)
-        ax.set_title(f"{model_name}\nMAE = {mae:.2f} mins", fontsize=14, pad=10)
+        ax.set_title(f"{model_name}\nMAE = {mae:.2f} mins | RMSE = {rmse:.2f}", fontsize=14, pad=10)
         ax.set_xlabel("Error in Minutes (Predicted - Actual)", fontsize=12)
         ax.set_ylabel("Frequency", fontsize=12)
         

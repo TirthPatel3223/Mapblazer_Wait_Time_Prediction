@@ -38,16 +38,17 @@ def generate_error_histograms(csv_path="data/realtime_comparison_v2.csv", output
         # Calculate raw error (Positive = Overpredicted, Negative = Underpredicted)
         error = df[col_name] - df["Actual Wait"]
         
-        # Calculate Mean Absolute Error (MAE)
+        # Calculate Mean Absolute Error (MAE) and Root Mean Squared Error (RMSE)
         mae = np.abs(error).mean()
+        rmse = np.sqrt((error ** 2).mean())
         
         ax = axes[i]
         
         # Plot histogram with Kernel Density Estimate
         sns.histplot(error, kde=True, ax=ax, bins=25, color='steelblue', edgecolor='black', alpha=0.7)
         
-        # Dynamic title with MAE explicitly stated
-        ax.set_title(f"{model_name}\nMAE = {mae:.2f} mins", fontsize=14, pad=10)
+        # Dynamic title with MAE and RMSE explicitly stated
+        ax.set_title(f"{model_name}\nMAE = {mae:.2f} mins | RMSE = {rmse:.2f}", fontsize=14, pad=10)
         ax.set_xlabel("Error in Minutes (Predicted - Actual)", fontsize=12)
         ax.set_ylabel("Frequency (Number of Rides)", fontsize=12)
         
