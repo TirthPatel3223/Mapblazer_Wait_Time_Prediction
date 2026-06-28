@@ -1,0 +1,121 @@
+park,ride,mae,best_params,train_samples,test_samples
+Disneyland,Adventureland Treehouse inspired by Walt Disney's Swiss Family Robinson,0.01,"{'subsample': 0.8, 'n_estimators': 100, 'max_depth': 10, 'learning_rate': 0.01, 'colsample_bytree': 0.8}",3928,983
+Disneyland,Indiana Jones Adventure,9.86,"{'subsample': 0.8, 'n_estimators': 300, 'max_depth': 8, 'learning_rate': 0.01, 'colsample_bytree': 0.8}",3928,983
+Disneyland,Jungle Cruise,7.49,"{'subsample': 1.0, 'n_estimators': 200, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 0.8}",3928,983
+Disneyland,Walt Disney's Enchanted Tiki Room,0.0,"{'subsample': 1.0, 'n_estimators': 300, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 1.0}",3928,983
+Disneyland,Davy Crockett's Explorer Canoes,3.34,"{'subsample': 1.0, 'n_estimators': 200, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 0.8}",3928,983
+Disneyland,The Many Adventures of Winnie the Pooh,3.76,"{'subsample': 0.8, 'n_estimators': 300, 'max_depth': 8, 'learning_rate': 0.01, 'colsample_bytree': 0.8}",3928,983
+Disneyland,"""it’s a small world"" Holiday",5.99,"{'subsample': 0.8, 'n_estimators': 300, 'max_depth': 8, 'learning_rate': 0.01, 'colsample_bytree': 0.8}",3928,983
+Disneyland,Alice in Wonderland,4.07,"{'subsample': 0.8, 'n_estimators': 300, 'max_depth': 8, 'learning_rate': 0.01, 'colsample_bytree': 0.8}",3928,983
+Disneyland,Casey Jr. Circus Train,2.75,"{'subsample': 0.8, 'n_estimators': 300, 'max_depth': 8, 'learning_rate': 0.01, 'colsample_bytree': 0.8}",3928,983
+Disneyland,Dumbo the Flying Elephant,4.56,"{'subsample': 1.0, 'n_estimators': 200, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 0.8}",3928,983
+Disneyland,King Arthur Carrousel,1.82,"{'subsample': 0.8, 'n_estimators': 300, 'max_depth': 8, 'learning_rate': 0.01, 'colsample_bytree': 0.8}",3928,983
+Disneyland,Mad Tea Party,2.21,"{'subsample': 0.8, 'n_estimators': 300, 'max_depth': 8, 'learning_rate': 0.01, 'colsample_bytree': 0.8}",3928,983
+Disneyland,Matterhorn Bobsleds,7.03,"{'subsample': 0.8, 'n_estimators': 300, 'max_depth': 8, 'learning_rate': 0.01, 'colsample_bytree': 0.8}",3928,983
+Disneyland,Mr. Toad's Wild Ride,3.83,"{'subsample': 0.8, 'n_estimators': 300, 'max_depth': 8, 'learning_rate': 0.01, 'colsample_bytree': 0.8}",3928,983
+Disneyland,Peter Pan's Flight,4.39,"{'subsample': 0.8, 'n_estimators': 300, 'max_depth': 8, 'learning_rate': 0.01, 'colsample_bytree': 0.8}",3928,983
+Disneyland,Pinocchio's Daring Journey,2.87,"{'subsample': 0.8, 'n_estimators': 300, 'max_depth': 8, 'learning_rate': 0.01, 'colsample_bytree': 0.8}",3928,983
+Disneyland,Snow White's Enchanted Wish,3.42,"{'subsample': 0.8, 'n_estimators': 300, 'max_depth': 8, 'learning_rate': 0.01, 'colsample_bytree': 0.8}",3928,983
+Disneyland,Storybook Land Canal Boats,3.37,"{'subsample': 0.8, 'n_estimators': 300, 'max_depth': 8, 'learning_rate': 0.01, 'colsample_bytree': 0.8}",3928,983
+Disneyland,Big Thunder Mountain Railroad,8.61,"{'subsample': 0.8, 'n_estimators': 300, 'max_depth': 8, 'learning_rate': 0.01, 'colsample_bytree': 0.8}",3928,983
+Disneyland,Pirate's Lair on Tom Sawyer Island,1.11,"{'subsample': 1.0, 'n_estimators': 200, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 0.8}",3928,983
+Disneyland,Sailing Ship Columbia,2.01,"{'subsample': 1.0, 'n_estimators': 200, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 0.8}",3928,983
+Disneyland,Great Moments with Mr. Lincoln,0.0,"{'subsample': 1.0, 'n_estimators': 200, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 0.8}",3928,983
+Disneyland,Chip 'n Dale's GADGETcoaster,5.06,"{'subsample': 0.8, 'n_estimators': 300, 'max_depth': 8, 'learning_rate': 0.01, 'colsample_bytree': 0.8}",3928,983
+Disneyland,Goofy's How-to-Play Yard,0.0,"{'subsample': 1.0, 'n_estimators': 200, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 0.8}",3928,983
+Disneyland,Mickey & Minnie's Runaway Railway,8.64,"{'subsample': 0.8, 'n_estimators': 300, 'max_depth': 4, 'learning_rate': 0.2, 'colsample_bytree': 0.8}",3928,983
+Disneyland,Mickey's House and Meet Mickey Mouse,5.11,"{'subsample': 0.8, 'n_estimators': 300, 'max_depth': 8, 'learning_rate': 0.01, 'colsample_bytree': 0.8}",3928,983
+Disneyland,Roger Rabbit's Car Toon Spin,6.51,"{'subsample': 1.0, 'n_estimators': 200, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 0.8}",3928,983
+Disneyland,Pirates of the Carbbean,8.84,"{'subsample': 0.8, 'n_estimators': 300, 'max_depth': 4, 'learning_rate': 0.2, 'colsample_bytree': 0.8}",3928,983
+Disneyland,Millenium Falcon: Smugglers Run,10.44,"{'subsample': 0.8, 'n_estimators': 300, 'max_depth': 8, 'learning_rate': 0.01, 'colsample_bytree': 0.8}",3928,983
+Disneyland,Star Wars: Rise of the Resistance,11.09,"{'subsample': 0.8, 'n_estimators': 300, 'max_depth': 8, 'learning_rate': 0.01, 'colsample_bytree': 0.8}",3928,983
+Disneyland,Astro Orbitor,6.34,"{'subsample': 1.0, 'n_estimators': 200, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 0.8}",3928,983
+Disneyland,Autopia,6.0,"{'subsample': 0.8, 'n_estimators': 300, 'max_depth': 8, 'learning_rate': 0.01, 'colsample_bytree': 0.8}",3928,983
+Disneyland,Buzz Lightyear Astro Blasters,14.58,"{'subsample': 0.8, 'n_estimators': 300, 'max_depth': 8, 'learning_rate': 0.01, 'colsample_bytree': 0.8}",3928,983
+Disneyland,Finding Nemo Submarine Voyage,5.69,"{'subsample': 1.0, 'n_estimators': 200, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 0.8}",3928,983
+Disneyland,Space Mountain,8.76,"{'subsample': 0.8, 'n_estimators': 300, 'max_depth': 8, 'learning_rate': 0.01, 'colsample_bytree': 0.8}",3928,983
+Disneyland,Star Tours - The Adventures Continue,11.02,"{'subsample': 0.8, 'n_estimators': 300, 'max_depth': 8, 'learning_rate': 0.01, 'colsample_bytree': 0.8}",3928,983
+Disneyland,Tiana's Bayou Adventure,8.28,"{'subsample': 0.8, 'n_estimators': 300, 'max_depth': 8, 'learning_rate': 0.05, 'colsample_bytree': 1.0}",1467,367
+Disneyland,Main Street Vehicles,0.0,"{'subsample': 1.0, 'n_estimators': 200, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 0.8}",1467,367
+Disneyland,Walt Disney - A Magical Life,0.0,"{'subsample': 1.0, 'n_estimators': 200, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 0.8}",1467,367
+Disneyland,Disney Gallery,0.0,"{'subsample': 1.0, 'n_estimators': 200, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 0.8}",1467,367
+Disneyland,Disneyland Monorail,3.61,"{'subsample': 1.0, 'n_estimators': 300, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 1.0}",1467,367
+Disney California Adventure Park,Guardians of the Galaxy - Mission: BREAKOUT!,13.06,"{'subsample': 1.0, 'n_estimators': 200, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 0.8}",3436,860
+Disney California Adventure Park,WEB SLINGERS: A Spider-Man Adventure,9.54,"{'subsample': 0.8, 'n_estimators': 300, 'max_depth': 8, 'learning_rate': 0.01, 'colsample_bytree': 0.8}",3436,860
+Disney California Adventure Park,Mater’s Junkyard Jamboree,5.49,"{'subsample': 0.8, 'n_estimators': 300, 'max_depth': 8, 'learning_rate': 0.01, 'colsample_bytree': 0.8}",3436,860
+Disney California Adventure Park,Grizzly River Run,6.05,"{'subsample': 0.8, 'n_estimators': 100, 'max_depth': 10, 'learning_rate': 0.01, 'colsample_bytree': 0.8}",3436,860
+Disney California Adventure Park,Redwood Creek Challenge Trail,0.35,"{'subsample': 0.8, 'n_estimators': 300, 'max_depth': 8, 'learning_rate': 0.05, 'colsample_bytree': 1.0}",3436,860
+Disney California Adventure Park,Soarin' Around the World,10.69,"{'subsample': 1.0, 'n_estimators': 200, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 0.8}",3436,860
+Disney California Adventure Park,Mickey's PhilharMagic,0.61,"{'subsample': 1.0, 'n_estimators': 200, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 0.8}",3436,860
+Disney California Adventure Park,"Monsters, Inc. Mike & Sulley to the Rescue",6.39,"{'subsample': 0.8, 'n_estimators': 300, 'max_depth': 8, 'learning_rate': 0.01, 'colsample_bytree': 0.8}",3436,860
+Disney California Adventure Park,Sorcerer's Workshop,0.0,"{'subsample': 1.0, 'n_estimators': 200, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 0.8}",3436,860
+Disney California Adventure Park,Golden Zephyr,3.48,"{'subsample': 1.0, 'n_estimators': 200, 'max_depth': 6, 'learning_rate': 0.01, 'colsample_bytree': 0.8}",3436,860
+Disney California Adventure Park,Goofy's Sky School,7.56,"{'subsample': 0.8, 'n_estimators': 300, 'max_depth': 8, 'learning_rate': 0.01, 'colsample_bytree': 0.8}",3436,860
+Disney California Adventure Park,Silly Symphony Swings,5.38,"{'subsample': 0.8, 'n_estimators': 300, 'max_depth': 8, 'learning_rate': 0.01, 'colsample_bytree': 0.8}",3436,860
+Disney California Adventure Park,The Little Mermaid ~ Ariel's Undersea Adventure,6.73,"{'subsample': 1.0, 'n_estimators': 200, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 0.8}",3436,860
+Disney California Adventure Park,Incredicoaster,7.41,"{'subsample': 0.8, 'n_estimators': 300, 'max_depth': 8, 'learning_rate': 0.01, 'colsample_bytree': 0.8}",3436,860
+Disney California Adventure Park,Inside Out Emotional Whirlwind,0.02,"{'subsample': 1.0, 'n_estimators': 200, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 0.8}",3436,860
+Disney California Adventure Park,Jessie's Critter Carousel,0.97,"{'subsample': 1.0, 'n_estimators': 200, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 0.8}",3436,860
+Disney California Adventure Park,Jumpin' Jellyfish,4.8,"{'subsample': 1.0, 'n_estimators': 200, 'max_depth': 6, 'learning_rate': 0.01, 'colsample_bytree': 0.8}",3436,860
+Disney California Adventure Park,Pixar Pal-A-Round- Swinging,5.46,"{'subsample': 1.0, 'n_estimators': 200, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 0.8}",3436,860
+Disney California Adventure Park,Pixar Pal-A-Round - Non-Swinging,5.69,"{'subsample': 1.0, 'n_estimators': 200, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 0.8}",3436,860
+Disney California Adventure Park,Toy Story Midway Mania!,11.69,"{'subsample': 1.0, 'n_estimators': 200, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 0.8}",3436,860
+Universal Studios Hollywood,DinoPlay,0.0,"{'subsample': 1.0, 'n_estimators': 200, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 0.8}",3438,860
+Universal Studios Hollywood,Jurassic World - The Ride,11.51,"{'subsample': 0.8, 'n_estimators': 300, 'max_depth': 8, 'learning_rate': 0.01, 'colsample_bytree': 0.8}",3438,860
+Universal Studios Hollywood,Revenge of the Mummy - The Ride,9.61,"{'subsample': 1.0, 'n_estimators': 200, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 0.8}",3438,860
+Universal Studios Hollywood,Despicable Me Minion Mayhem,7.07,"{'subsample': 0.8, 'n_estimators': 300, 'max_depth': 8, 'learning_rate': 0.01, 'colsample_bytree': 0.8}",3438,860
+Universal Studios Hollywood,The Secret Life of Pets: Off the Leash,8.61,"{'subsample': 1.0, 'n_estimators': 200, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 0.8}",3438,860
+Universal Studios Hollywood,Kung Fu Panda Adventure,1.63,"{'subsample': 0.8, 'n_estimators': 300, 'max_depth': 8, 'learning_rate': 0.01, 'colsample_bytree': 0.8}",3438,860
+Universal Studios Hollywood,The Simpson's Ride,7.44,"{'subsample': 1.0, 'n_estimators': 200, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 0.8}",3438,860
+Universal Studios Hollywood,Flight of the Hippogriff,8.98,"{'subsample': 1.0, 'n_estimators': 200, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 0.8}",3438,860
+Universal Studios Hollywood,Harry Potter and the Forbidden Journey,9.49,"{'subsample': 0.8, 'n_estimators': 300, 'max_depth': 8, 'learning_rate': 0.01, 'colsample_bytree': 0.8}",3438,860
+Universal Studios Hollywood,Ollivanders,5.78,"{'subsample': 1.0, 'n_estimators': 200, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 0.8}",3438,860
+Universal Studios Hollywood,Transformers: The Ride-3D,11.86,"{'subsample': 1.0, 'n_estimators': 200, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 0.8}",3438,860
+Universal Studios Hollywood,Studio Tour,3.59,"{'subsample': 0.8, 'n_estimators': 300, 'max_depth': 8, 'learning_rate': 0.01, 'colsample_bytree': 0.8}",3438,860
+SeaWorld San Diego,Arctic Rescue,8.73,"{'subsample': 1.0, 'n_estimators': 200, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 0.8}",2421,606
+SeaWorld San Diego,Emperor ,1.68,"{'subsample': 0.8, 'n_estimators': 300, 'max_depth': 8, 'learning_rate': 0.01, 'colsample_bytree': 0.8}",2421,606
+SeaWorld San Diego,Rescue Rafter,0.52,"{'subsample': 1.0, 'n_estimators': 200, 'max_depth': 8, 'learning_rate': 0.01, 'colsample_bytree': 0.8}",2421,606
+SeaWorld San Diego,Rescue Riders,1.36,"{'subsample': 1.0, 'n_estimators': 200, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 0.8}",2421,606
+SeaWorld San Diego,Tidepool Twist,0.73,"{'subsample': 1.0, 'n_estimators': 200, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 0.8}",2421,606
+SeaWorld San Diego Obsolete,Bayside Skyride,0.37,"{'subsample': 1.0, 'n_estimators': 300, 'max_depth': 8, 'learning_rate': 0.01, 'colsample_bytree': 1.0}",2421,606
+SeaWorld San Diego Obsolete,Electric Eel,4.3,"{'subsample': 1.0, 'n_estimators': 200, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 0.8}",2421,606
+SeaWorld San Diego Obsolete,Journey to Atlantis,3.57,"{'subsample': 1.0, 'n_estimators': 200, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 0.8}",2421,606
+SeaWorld San Diego Obsolete,Manta,2.92,"{'subsample': 1.0, 'n_estimators': 200, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 0.8}",2421,606
+SeaWorld San Diego Obsolete,Octarock,0.89,"{'subsample': 0.8, 'n_estimators': 300, 'max_depth': 8, 'learning_rate': 0.01, 'colsample_bytree': 0.8}",2421,606
+SeaWorld San Diego Obsolete,Riptide Rescue,0.0,"{'subsample': 1.0, 'n_estimators': 200, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 0.8}",2421,606
+SeaWorld San Diego Obsolete,Sea Dragon Drop,0.51,"{'subsample': 1.0, 'n_estimators': 200, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 0.8}",2421,606
+SeaWorld San Diego Obsolete,Shipwreck Rapids,0.19,"{'subsample': 0.8, 'n_estimators': 100, 'max_depth': 10, 'learning_rate': 0.01, 'colsample_bytree': 0.8}",2421,606
+SeaWorld San Diego Obsolete,Skytower,0.55,"{'subsample': 0.8, 'n_estimators': 300, 'max_depth': 8, 'learning_rate': 0.01, 'colsample_bytree': 0.8}",2421,606
+SeaWorld San Diego Obsolete,Tentacle Twirl,1.89,"{'subsample': 0.8, 'n_estimators': 100, 'max_depth': 10, 'learning_rate': 0.01, 'colsample_bytree': 0.8}",2421,606
+Six Flags Magic Mountain,Buccaneer,0.54,"{'subsample': 1.0, 'n_estimators': 200, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 0.8}",1502,376
+Six Flags Magic Mountain,Grand American Carousel,0.4,"{'subsample': 1.0, 'n_estimators': 200, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 0.8}",1501,376
+Six Flags Magic Mountain,Jet Stream,0.0,"{'subsample': 1.0, 'n_estimators': 200, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 0.8}",1502,376
+Six Flags Magic Mountain,0,0.0,"{'subsample': 1.0, 'n_estimators': 200, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 0.8}",1501,376
+Six Flags Magic Mountain,Merrie Melodies Carousel,0.24,"{'subsample': 1.0, 'n_estimators': 200, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 0.8}",1500,376
+Six Flags Magic Mountain,Road Runner Express,0.96,"{'subsample': 1.0, 'n_estimators': 200, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 0.8}",1500,376
+Six Flags Magic Mountain,Roaring Rapids,1.44,"{'subsample': 1.0, 'n_estimators': 200, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 0.8}",1500,376
+Six Flags Magic Mountain,Swashbuckler,0.5,"{'subsample': 1.0, 'n_estimators': 200, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 0.8}",1500,376
+Six Flags Magic Mountain,Gold Rusher,0.54,"{'subsample': 1.0, 'n_estimators': 300, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 1.0}",1500,375
+Six Flags Magic Mountain,Apocalypse,1.65,"{'subsample': 0.8, 'n_estimators': 300, 'max_depth': 8, 'learning_rate': 0.01, 'colsample_bytree': 0.8}",1500,375
+Six Flags Magic Mountain,CraZanity ,1.7,"{'subsample': 1.0, 'n_estimators': 200, 'max_depth': 6, 'learning_rate': 0.01, 'colsample_bytree': 0.8}",1500,375
+Six Flags Magic Mountain,Dive Devil,0.32,"{'subsample': 1.0, 'n_estimators': 300, 'max_depth': 8, 'learning_rate': 0.01, 'colsample_bytree': 1.0}",1500,375
+Six Flags Magic Mountain,Full Throttle,3.4,"{'subsample': 1.0, 'n_estimators': 200, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 0.8}",1500,375
+Six Flags Magic Mountain,Goliath,3.17,"{'subsample': 0.8, 'n_estimators': 300, 'max_depth': 8, 'learning_rate': 0.01, 'colsample_bytree': 0.8}",1500,376
+Six Flags Magic Mountain,Ninja,1.59,"{'subsample': 1.0, 'n_estimators': 200, 'max_depth': 8, 'learning_rate': 0.01, 'colsample_bytree': 0.8}",1500,375
+Six Flags Magic Mountain,Scream!,0.75,"{'subsample': 1.0, 'n_estimators': 300, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 1.0}",1500,375
+Six Flags Magic Mountain,Tatsu,4.23,"{'subsample': 0.8, 'n_estimators': 300, 'max_depth': 8, 'learning_rate': 0.05, 'colsample_bytree': 1.0}",1500,376
+Six Flags Magic Mountain,Twisted Colossus,2.49,"{'subsample': 0.8, 'n_estimators': 300, 'max_depth': 8, 'learning_rate': 0.01, 'colsample_bytree': 0.8}",1500,375
+Six Flags Magic Mountain,Viper,1.34,"{'subsample': 0.8, 'n_estimators': 300, 'max_depth': 8, 'learning_rate': 0.01, 'colsample_bytree': 0.8}",1500,375
+Six Flags Magic Mountain,West Coast Racers,2.85,"{'subsample': 1.0, 'n_estimators': 300, 'max_depth': 8, 'learning_rate': 0.01, 'colsample_bytree': 1.0}",1500,375
+Six Flags Magic Mountain,WONDER WOMAN Flight of Courage,1.93,"{'subsample': 0.8, 'n_estimators': 300, 'max_depth': 8, 'learning_rate': 0.01, 'colsample_bytree': 0.8}",1500,375
+Six Flags Magic Mountain,X2,10.15,"{'subsample': 1.0, 'n_estimators': 300, 'max_depth': 8, 'learning_rate': 0.01, 'colsample_bytree': 1.0}",1500,375
+Six Flags Magic Mountain,Magic Mover,0.5,"{'subsample': 1.0, 'n_estimators': 200, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 0.8}",1500,376
+Six Flags Magic Mountain,Canyon Blaster,0.65,"{'subsample': 1.0, 'n_estimators': 200, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 0.8}",1003,251
+Six Flags Magic Mountain,Looney Tunes Lodge,0.86,"{'subsample': 1.0, 'n_estimators': 300, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 1.0}",1002,251
+Six Flags Magic Mountain,Speedy Gonzales Hot Rod Racers,0.25,"{'subsample': 1.0, 'n_estimators': 300, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 1.0}",837,210
+Six Flags Magic Mountain,Sylvester's Pounce and Bounce,0.22,"{'subsample': 1.0, 'n_estimators': 300, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 1.0}",1004,251
+Six Flags Magic Mountain,Taz's Trucking Co.,0.87,"{'subsample': 1.0, 'n_estimators': 300, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 1.0}",1002,251
+Six Flags Magic Mountain,Daffy Duck's Adventure Tours,0.87,"{'subsample': 1.0, 'n_estimators': 300, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 1.0}",1002,251
+Six Flags Magic Mountain,Elmer Fudd's Weather Balloons,0.22,"{'subsample': 1.0, 'n_estimators': 300, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 1.0}",1002,251
+Six Flags Magic Mountain,JUSTICE LEAGUE Meet & Greets,1.46,"{'subsample': 1.0, 'n_estimators': 200, 'max_depth': 6, 'learning_rate': 0.01, 'colsample_bytree': 0.8}",1002,251
+Six Flags Magic Mountain,Yosemite Sam's Flight School,0.22,"{'subsample': 1.0, 'n_estimators': 300, 'max_depth': 10, 'learning_rate': 0.05, 'colsample_bytree': 1.0}",1002,251
