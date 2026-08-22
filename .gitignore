@@ -4,10 +4,10 @@ data/
 *.csv
 !tests/fixtures/*.csv
 
-# Model artefacts are owned by the MLflow registry now, not git. The previous layout
-# committed 422 MB of Prophet and XGBoost JSON without LFS.
+# Model artefacts live in the Databricks volume (themepark.gold.models), not git.
 trained_models/
 artifacts/
+gold_snapshot/
 mlruns/
 site/
 

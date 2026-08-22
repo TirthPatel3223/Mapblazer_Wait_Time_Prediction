@@ -16,8 +16,13 @@ from pathlib import Path
 
 import pandas as pd
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+# Databricks serverless runs a spark_python_task as exec(compile(source, path, "exec")),
+# which leaves __file__ undefined while still recording the real path on the code object.
+# Both lookups are needed: __file__ on a laptop or a runner, the frame on Databricks.
+# Repeated verbatim in each entry point -- see jobs/_databricks.py for why it cannot be
+# imported from there.
+HERE = Path(globals().get("__file__", sys._getframe().f_code.co_filename)).resolve().parent
+sys.path[:0] = [str(HERE), str(HERE.parent / "src")]
 
 from _databricks import log, read_delta, spark_session, table_exists, write_delta  # noqa: E402
 from themepark.config import DatabricksSettings  # noqa: E402
@@ -82,4 +87,11 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # Only raise on failure. A Databricks task runs this inside an IPython kernel, where
+    # SystemExit is reported as an error whatever its code -- so `raise SystemExit(0)`
+    # marked bronze_load FAILED after it had already written all 842,539 rows, and the
+    # retry policy then ran the successful job twice more. Returning normally on success
+    # is the difference between a green task and a red one that did the work.
+    _status = main()
+    if _status:
+        raise SystemExit(_status)

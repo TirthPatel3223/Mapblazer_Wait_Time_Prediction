@@ -139,7 +139,9 @@ def score_grid(
     out["generated_at"] = now
 
     log.info(
-        "scored %d rows with %s v%s (coverage %.3f), mean predicted wait %.1f min",
+        # No "v" prefix: model_version carries whatever identifier the caller registered,
+        # which for a Unity Catalog logged model is a `models:/...` URI, not a number.
+        "scored %d rows with %s (%s), coverage %.3f, mean predicted wait %.1f min",
         len(out),
         model.name,
         model_version,

@@ -110,11 +110,17 @@ class Databricks:
     def _workspace(self):
         from databricks.sdk import WorkspaceClient
 
+        self.settings.require_api_credentials()
         return WorkspaceClient(host=self.settings.host, token=self.settings.token)
 
     def _sql(self):
         from databricks import sql
 
+        self.settings.require_api_credentials()
+        if not self.settings.warehouse_id.strip():
+            raise RuntimeError(
+                "DATABRICKS_WAREHOUSE_ID must be set to run SQL against the warehouse."
+            )
         return sql.connect(
             server_hostname=self.settings.server_hostname,
             http_path=self.settings.http_path,
@@ -161,16 +167,37 @@ class Databricks:
         return int(self.scalar(f"SELECT COALESCE(MAX(wait_time_id), 0) FROM {table}", 0))
 
     def upload_parquet(self, df: pd.DataFrame, filename: str) -> str:
-        """Land a Parquet batch in the ingestion volume, partitioned by UTC date."""
+        """Land a Parquet batch in the ingestion volume, partitioned by UTC date.
+
+        Timestamps are down-cast to microseconds first. pandas holds datetimes as
+        `datetime64[ns]` and writes them as Parquet `TIMESTAMP(NANOS)`, which Spark
+        refuses to read at all -- `[PARQUET_TYPE_ILLEGAL]`, which failed bronze_load
+        after the file had already been uploaded and looked perfectly healthy. Microseconds
+        are Spark's and Delta's native resolution, and the feed is minute-granularity, so
+        nothing is lost.
+        """
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         path = f"{self.settings.landing_path}/dt={today}/{filename}"
 
+        frame = df.copy()
+        for column in frame.columns:
+            if pd.api.types.is_datetime64_any_dtype(frame[column]):
+                frame[column] = frame[column].dt.as_unit("us")
+
         buffer = io.BytesIO()
-        df.to_parquet(buffer, index=False, compression="snappy")
+        # coerce_timestamps is the backstop for a column the loop above cannot see, such as
+        # a datetime nested inside an object column.
+        frame.to_parquet(
+            buffer,
+            index=False,
+            compression="snappy",
+            coerce_timestamps="us",
+            allow_truncated_timestamps=True,
+        )
         buffer.seek(0)
 
         self._workspace().files.upload(path, buffer, overwrite=True)
-        log.info("uploaded %d rows to %s", len(df), path)
+        log.info("uploaded %d rows to %s", len(frame), path)
         return path
 
     def read_table(self, table: str, where: str = "") -> pd.DataFrame:

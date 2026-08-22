@@ -22,8 +22,13 @@ from pathlib import Path
 
 import pandas as pd
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+# Databricks serverless runs a spark_python_task as exec(compile(source, path, "exec")),
+# which leaves __file__ undefined while still recording the real path on the code object.
+# Both lookups are needed: __file__ on a laptop or a runner, the frame on Databricks.
+# Repeated verbatim in each entry point -- see jobs/_databricks.py for why it cannot be
+# imported from there.
+HERE = Path(globals().get("__file__", sys._getframe().f_code.co_filename)).resolve().parent
+sys.path[:0] = [str(HERE), str(HERE.parent / "src")]
 
 from _databricks import log  # noqa: E402
 from themepark.config import DatabricksSettings, pipeline  # noqa: E402
@@ -81,6 +86,7 @@ def main() -> int:
     log.info("decision: %s", run.decision)
 
     _write_promotion_log(cfg, run)
+    _write_model_metrics(cfg, run)
 
     if run.decision.promoted and model_uri:
         _set_champion_alias(cfg, settings)
@@ -93,6 +99,34 @@ def main() -> int:
 
     log.info("published %d forecast rows from %s", len(forecast), champion.name)
     return 0
+
+
+def _write_model_metrics(cfg: DatabricksSettings, run) -> None:
+    """Persist this week's candidate scorecard to gold.
+
+    The same comparison goes to MLflow, but MLflow is not queryable from the dashboard or
+    from Supabase: `gold.model_metrics` is what publish.py ships and what the leaderboard
+    panel reads. Nothing wrote it, which is why that panel rendered empty while the run
+    itself looked perfectly healthy -- the table was referenced in three places and
+    produced in none.
+    """
+    frame = pd.DataFrame(run.results)
+    frame["trained_at"] = pd.Timestamp.utcnow().tz_localize(None)
+    frame["git_sha"] = run.git_sha
+    # Strings rather than booleans: Delta infers the schema from the first write, and a
+    # mixed-type column is a schema conflict on the following week's append.
+    frame["is_champion"] = (frame["model"] == run.decision.winner).map(
+        {True: "true", False: "false"}
+    )
+    frame["train_end"] = str(run.train_end)
+    frame["test_end"] = str(run.test_end)
+
+    try:
+        from _databricks import spark_session, write_delta
+
+        write_delta(spark_session(), frame, cfg.metrics_table, mode="append")
+    except Exception as exc:
+        log.warning("could not write model metrics: %s", exc)
 
 
 def _write_promotion_log(cfg: DatabricksSettings, run) -> None:
@@ -140,4 +174,11 @@ def _write_forecast(args, cfg: DatabricksSettings, forecast: pd.DataFrame) -> No
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # Only raise on failure. A Databricks task runs this inside an IPython kernel, where
+    # SystemExit is reported as an error whatever its code -- so `raise SystemExit(0)`
+    # marked bronze_load FAILED after it had already written all 842,539 rows, and the
+    # retry policy then ran the successful job twice more. Returning normally on success
+    # is the difference between a green task and a red one that did the work.
+    _status = main()
+    if _status:
+        raise SystemExit(_status)

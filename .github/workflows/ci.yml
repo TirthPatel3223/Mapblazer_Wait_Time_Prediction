@@ -8,6 +8,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -15,29 +16,21 @@ jobs:
           python-version: "3.11"
           cache: pip
 
-      - run: pip install --quiet pandas numpy pyarrow holidays "xgboost<4" pytest ruff
-
-      - name: Secret scan
-        # Runs before lint and tests: a leaked credential is the one failure that cannot
-        # be fixed by a follow-up commit, because removing a file does not un-publish it.
-        run: python scripts/check_no_secrets.py
+      - run: pip install --quiet -r requirements.txt -r requirements-dev.txt
 
       - name: Lint
-        run: ruff check src jobs scripts tests
+        run: ruff check .
 
       - name: Tests
-        # The suite is mostly regression tests for the two defects this rewrite fixed:
-        # the UTC/park-local timezone error and the entity-resolution mismatch. If either
-        # ever comes back, CI fails before it can reach a scheduled run.
+        # The suite includes the failure-path proofs: a failed quality check must drop
+        # _current and leave _last intact, the fallback must refresh the forecast with
+        # the previous champion, and a first-run failure must change nothing.
         run: pytest -q
 
   deploy:
-    # Job definitions are deployed as code, so the Databricks workspace can be rebuilt
-    # from this repo instead of reconstructed by clicking through the UI.
-    #
-    # Skips cleanly when no workspace is wired up rather than failing. A missing secret
-    # is an unconfigured environment, not a broken commit, and a red X that means
-    # "you haven't signed up yet" trains you to ignore the one that means something.
+    # The job definition is deployed as code so the workspace can be rebuilt from this
+    # repo. Skips cleanly when no workspace secrets are wired up: a missing secret is
+    # an unconfigured environment, not a broken commit.
     needs: test
     if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
@@ -54,22 +47,17 @@ jobs:
             echo "configured=true" >> "$GITHUB_OUTPUT"
           else
             echo "configured=false" >> "$GITHUB_OUTPUT"
-            echo "::notice title=Bundle deploy skipped::DATABRICKS_HOST / DATABRICKS_TOKEN are not set. Add them under Settings > Secrets and variables > Actions to enable deployment."
+            echo "::notice title=Bundle deploy skipped::DATABRICKS_HOST / DATABRICKS_TOKEN are not set."
           fi
 
       - uses: databricks/setup-cli@main
         if: steps.workspace.outputs.configured == 'true'
 
-      - name: Validate the asset bundle
+      - name: Validate and deploy the asset bundle
         if: steps.workspace.outputs.configured == 'true'
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
-        run: databricks bundle validate --target prod
-
-      - name: Deploy the asset bundle
-        if: steps.workspace.outputs.configured == 'true'
-        env:
-          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
-          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
-        run: databricks bundle deploy --target prod
+        run: |
+          databricks bundle validate --target prod
+          databricks bundle deploy --target prod

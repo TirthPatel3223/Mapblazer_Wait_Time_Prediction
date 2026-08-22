@@ -1,38 +1,17 @@
-[build-system]
-requires = ["setuptools>=68", "wheel"]
-build-backend = "setuptools.build_meta"
-
 [project]
-name = "themepark"
-version = "2.0.0"
-description = "Production wait-time forecasting pipeline for theme park attractions"
+name = "themepark-pipeline"
+version = "3.0.0"
+description = "Theme-park wait-time pipeline: one Databricks task, one file"
 requires-python = ">=3.10"
-dependencies = [
-    "pandas>=2.0",
-    "numpy>=1.24",
-    "pyarrow>=14.0",
-    "holidays>=0.40",
-    "xgboost>=2.0,<4.0",
-    "prophet>=1.1.5",
-]
-
-[project.optional-dependencies]
-ingest = ["psycopg[binary]>=3.1", "databricks-sdk>=0.30", "requests>=2.31"]
-serve = ["databricks-sql-connector>=3.0", "requests>=2.31"]
-track = ["mlflow>=2.16"]
-dev = ["pytest>=8.0", "ruff>=0.6"]
-
-[tool.setuptools.packages.find]
-where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["."]
 filterwarnings = ["ignore::DeprecationWarning", "ignore::FutureWarning"]
 
 [tool.ruff]
 line-length = 100
-src = ["src", "tests", "jobs"]
+include = ["pipeline.py", "publish.py", "tests/**/*.py"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]

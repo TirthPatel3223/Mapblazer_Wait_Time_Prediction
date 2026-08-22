@@ -1,12 +1,11 @@
 name: publish
 
-# Runs after the Databricks weekly job. Databricks cannot push to Supabase or GitHub
-# Pages (no outbound internet on Free Edition), so the runner pulls the gold tables over
-# the SQL warehouse and fans them out.
+# Runs after the Databricks weekly job. Free Edition jobs have no outbound internet,
+# so the runner pulls the gold _last tables over the SQL warehouse, pushes them to
+# Supabase (atomically, via the publish_serving RPC), and deploys the dashboard.
 on:
   schedule:
-    # Sunday 08:00 UTC -- two hours after the training job starts, which leaves ample
-    # slack for a retry without needing the two schedules to be coupled.
+    # Sunday 08:00 UTC, two hours after the 06:00 training job.
     - cron: "0 8 * * 0"
   workflow_dispatch:
 
@@ -43,34 +42,41 @@ jobs:
             echo "configured=true" >> "$GITHUB_OUTPUT"
           else
             echo "configured=false" >> "$GITHUB_OUTPUT"
-            echo "::notice title=Publish skipped::DATABRICKS_HOST / SUPABASE_URL are not set yet."
+            echo "::notice title=Publish skipped::DATABRICKS_HOST / SUPABASE_URL secrets are not set."
           fi
 
       - if: steps.creds.outputs.configured == 'true'
-        run: pip install --quiet pandas pyarrow databricks-sql-connector databricks-sdk requests
+        run: pip install --quiet pandas numpy pyarrow databricks-sql-connector requests
 
-      - name: Publish gold tables to Supabase
+      - name: Fetch gold tables from the SQL warehouse
         if: steps.creds.outputs.configured == 'true'
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
           DATABRICKS_WAREHOUSE_ID: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
+        # One warehouse fetch feeds both the Supabase push and the dashboard build.
+        run: python publish.py --no-push --save-parquet gold_snapshot
+
+      - name: Push to Supabase
+        id: supabase
+        if: steps.creds.outputs.configured == 'true'
+        # The dashboard does not depend on Supabase, so a failed push must not stop
+        # the Pages deploy. The last step still fails the job so the push failure
+        # alerts instead of passing silently.
+        continue-on-error: true
+        env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-        run: python jobs/publish.py
+        run: python publish.py --from-parquet gold_snapshot
 
       - name: Render the dashboard
         if: steps.creds.outputs.configured == 'true'
-        env:
-          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
-          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
-          DATABRICKS_WAREHOUSE_ID: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-        run: python jobs/build_dashboard.py --out site/index.html
+        run: python dashboard.py --from-parquet gold_snapshot --out site/index.html
 
       - uses: actions/configure-pages@v5
         if: steps.creds.outputs.configured == 'true'
+        with:
+          enablement: true
       - uses: actions/upload-pages-artifact@v3
         if: steps.creds.outputs.configured == 'true'
         with:
@@ -78,3 +84,9 @@ jobs:
       - id: deployment
         if: steps.creds.outputs.configured == 'true'
         uses: actions/deploy-pages@v4
+
+      - name: Fail the job if the Supabase push failed
+        if: steps.creds.outputs.configured == 'true' && steps.supabase.outcome == 'failure'
+        run: |
+          echo "Supabase push failed; the dashboard still deployed. See the 'Push to Supabase' step."
+          exit 1

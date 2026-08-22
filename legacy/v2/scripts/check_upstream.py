@@ -21,6 +21,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from themepark.envfile import load as load_dotenv  # noqa: E402
+
 PASS, FAIL, WARN, INFO = "PASS", "FAIL", "WARN", " -- "
 EXPECTED_TABLES = ["wait_times", "attractions", "themeparks"]
 NEEDED_COLUMNS = {
@@ -38,17 +40,14 @@ def line(status: str, message: str, detail: str = "") -> None:
 
 
 def load_env() -> dict[str, str]:
-    """Read .env without adding a dependency."""
-    env = {}
-    path = ROOT / ".env"
-    if path.exists():
-        for raw in path.read_text(encoding="utf-8").splitlines():
-            raw = raw.strip()
-            if raw and not raw.startswith("#") and "=" in raw:
-                key, _, value = raw.partition("=")
-                env[key.strip()] = value.strip().strip("\"'")
-    env.update({k: v for k, v in os.environ.items() if k.startswith("PG_")})
-    return env
+    """Merge `.env` into the environment and hand back the result.
+
+    Delegates to themepark.envfile so this script and the jobs it is meant to de-risk
+    cannot disagree about which credentials they are using -- a preflight that reads its
+    configuration differently from the thing it checks is worse than no preflight.
+    """
+    load_dotenv()
+    return dict(os.environ)
 
 
 def main() -> int:

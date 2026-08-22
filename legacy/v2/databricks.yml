@@ -1,0 +1,153 @@
+# Databricks Asset Bundle -- the weekly job defined as code.
+#
+# Deployed by .github/workflows/ci.yml on every push to the default branch, so the
+# workspace is reproducible from this repo rather than reconstructed by clicking through
+# the UI. That matters more than usual here: the free-tier account is the only environment
+# there is, and it can be deleted for prolonged inactivity.
+#
+#   databricks bundle validate --target prod
+#   databricks bundle deploy   --target prod
+#   databricks bundle run themepark_weekly --target prod
+
+bundle:
+  name: themepark
+
+variables:
+  catalog:
+    description: Unity Catalog catalog holding bronze/silver/gold
+    default: themepark
+  notification_email:
+    description: Address that receives job-failure mail
+    default: tirthpatel3223@gmail.com
+
+targets:
+  prod:
+    # Deliberately no `mode:`. `production` requires a run_as service principal that a
+    # single-user free workspace does not have, and `development` force-pauses every
+    # schedule -- which would defeat the point of a hands-off pipeline.
+    default: true
+    workspace:
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}
+    resources:
+      jobs:
+        themepark_weekly:
+          schedule:
+            # Sunday 06:00 UTC. The publish workflow on GitHub runs at 08:00, leaving two
+            # hours of slack so a retry here does not need the schedules to be coupled.
+            quartz_cron_expression: "0 0 6 ? * SUN"
+            timezone_id: UTC
+            pause_status: UNPAUSED
+
+resources:
+  jobs:
+    themepark_weekly:
+      name: themepark-weekly-retrain
+
+      # Free Edition has no on-call rotation; failure mail plus the dashboard's staleness
+      # banner is the whole alerting story, and it is enough for a system whose worst
+      # failure mode is serving last week's forecast for another week.
+      email_notifications:
+        on_failure:
+          - ${var.notification_email}
+        no_alert_for_skipped_runs: true
+
+      # Free Edition allows 5 concurrent job tasks per account; this DAG is strictly
+      # sequential, so it stays well inside that.
+      max_concurrent_runs: 1
+
+      tasks:
+        - task_key: bronze_load
+          description: Landing volume Parquet -> append-only bronze Delta
+          spark_python_task:
+            python_file: ./jobs/bronze_load.py
+          environment_key: light
+          max_retries: 2
+          min_retry_interval_millis: 120000
+
+        - task_key: silver_build
+          description: Timezone correction, filtering and the 30-minute grid
+          depends_on:
+            - task_key: bronze_load
+          spark_python_task:
+            python_file: ./jobs/silver_build.py
+          environment_key: light
+          max_retries: 1
+
+        - task_key: train
+          description: Retrain four candidates, score them, decide a champion, publish a forecast
+          depends_on:
+            - task_key: silver_build
+          spark_python_task:
+            python_file: ./jobs/train_job.py
+          environment_key: ml
+          # Deliberately no retry. A failure here is almost always the promotion gate
+          # refusing to ship (nothing beat the baseline, or coverage collapsed), and
+          # retrying a correct refusal just burns the free-tier compute quota.
+          max_retries: 0
+
+        - task_key: verify
+          description: Score the previously published forecast against observed actuals
+          depends_on:
+            - task_key: train
+          spark_python_task:
+            python_file: ./jobs/verify_job.py
+          environment_key: metrics
+          max_retries: 1
+
+      # Three environments rather than one, sized to what each task actually imports.
+      #
+      # This matters on the free tier for a specific reason: the weekly job is only ~55
+      # seconds of real compute, so the dominant cost is dependency installation, not
+      # training. Prophet pulls cmdstan, which is by far the slowest install here. Giving
+      # every task the full dependency set installed it four times to use it once.
+      #
+      # scikit-learn is deliberately absent -- dropping the leaky RandomizedSearchCV from
+      # the local XGBoost fleet left it entirely unused.
+      environments:
+        # Spark and pandas only, both already in the serverless runtime.
+        - environment_key: light
+          spec:
+            client: "3"
+
+        # Calendar features for the accuracy segments.
+        - environment_key: metrics
+          spec:
+            client: "3"
+            dependencies:
+              - holidays>=0.40
+
+        # The only task that trains anything, and the only one paying for cmdstan.
+        - environment_key: ml
+          spec:
+            client: "3"
+            dependencies:
+              - holidays>=0.40
+              - xgboost>=2.0,<4.0
+              - prophet>=1.1.5
+              - mlflow>=2.16
+
+    # A separate, deliberately unscheduled job. Backfilling is a bring-up and repair tool,
+    # not part of the weekly cycle: putting it in the same job as a dependency-free task
+    # would make it run every Sunday, republishing weeks that were already graded.
+    themepark_backfill:
+      name: themepark-accuracy-backfill
+
+      tasks:
+        - task_key: backfill_accuracy
+          description: Score past weeks with @champion so verify has actuals to grade
+          spark_python_task:
+            python_file: ./jobs/backfill_accuracy.py
+          # Loads the champion through MLflow and runs Prophet to score, so it needs the
+          # same dependency set as training.
+          environment_key: ml
+          max_retries: 0
+
+      environments:
+        - environment_key: ml
+          spec:
+            client: "3"
+            dependencies:
+              - holidays>=0.40
+              - xgboost>=2.0,<4.0
+              - prophet>=1.1.5
+              - mlflow>=2.16

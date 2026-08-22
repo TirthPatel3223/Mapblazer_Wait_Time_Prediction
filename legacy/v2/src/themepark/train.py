@@ -14,16 +14,24 @@ import os
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pandas as pd
 
 from .config import pipeline
 from .evaluate import chronological_split, evaluate_model, format_scorecard, high_wait_entities
-from .models import CANDIDATE_REGISTRY
+from .models import candidate_names, get_candidate
 from .models.base import WaitTimeModel
 from .promote import PromotionDecision, decide
 
 log = logging.getLogger(__name__)
+
+# The registered model pickles classes from this package, and MLflow records `code: null`
+# unless told to carry them -- making the artifact loadable only by a process that already
+# has this repo on sys.path. That silently disabled the promotion gate: load_champion()
+# raised ModuleNotFoundError, the run logged "no champion registered" and promoted
+# unconditionally, so a gate that is supposed to be able to refuse always said yes.
+PACKAGE_ROOT = str(Path(__file__).resolve().parent)
 
 SILVER_COLUMNS = ["park_name", "ride_key", "ride_name", "ts_local", "wait_time"]
 
@@ -86,14 +94,14 @@ def train_candidates(
     The high-wait segment is computed once from the training data and shared, so every
     model is judged against an identical definition of "the rides that matter".
     """
-    names = candidates or list(CANDIDATE_REGISTRY)
+    names = candidates or candidate_names()
     segment = high_wait_entities(train)
     log.info("high-wait segment: %d entities above %.0f min", len(segment), pipeline().high_wait_threshold_min)
 
     results, models = [], {}
     for name in names:
         log.info("training %s ...", name)
-        model = CANDIDATE_REGISTRY[name]().fit(train)
+        model = get_candidate(name)().fit(train)
         scores = evaluate_model(model, train, test, high_wait=segment)
         results.append(scores)
         models[name] = model
@@ -229,6 +237,9 @@ def log_to_mlflow(run: TrainingRun, experiment: str | None = None) -> str | None
             python_model=pyfunc_adapter(champion),
             input_example=sample,
             registered_model_name=cfg.registered_model_name,
+            # Ship the package with the model so the artifact stands on its own -- see
+            # PACKAGE_ROOT. This is also what makes the model servable outside this repo.
+            code_paths=[PACKAGE_ROOT],
         )
         log.info("registered champion %s as %s", champion.name, info.model_uri)
         return info.model_uri
@@ -256,15 +267,37 @@ def pyfunc_adapter(model: WaitTimeModel):
     return WaitTimeForecaster(model)
 
 
+# What MLflow says when the model or the alias genuinely is not there yet. Anything else
+# is a real failure and must not be mistaken for a first deployment.
+_NOT_FOUND_MARKERS = (
+    "RESOURCE_DOES_NOT_EXIST",
+    "does not exist",
+    "not found",
+    "no such",
+)
+
+
+class ChampionLoadError(RuntimeError):
+    """A champion is registered but could not be loaded."""
+
+
 def load_champion(model_name: str | None = None, alias: str = "champion") -> WaitTimeModel | None:
     """Load the registered champion, or None on the first ever run.
 
     Reaches through the pyfunc wrapper to the underlying `WaitTimeModel` so the gate can
     re-score it with the same code path as the challengers.
+
+    The two failure modes are deliberately not the same. Nothing registered yet is normal
+    and returns None. A champion that exists and will not load is an error, and raising is
+    the safe direction: this function used to swallow both, so a ModuleNotFoundError in the
+    artifact made every run report "no champion registered" and promote unconditionally.
+    The gate looked like it was working -- it emitted [PROMOTED] every week -- while having
+    quietly lost the ability to refuse.
     """
     try:
         import mlflow
     except ImportError:
+        log.info("mlflow is not installed; no incumbent to compare against")
         return None
 
     uri = f"models:/{model_name or pipeline().registered_model_name}@{alias}"
@@ -272,5 +305,13 @@ def load_champion(model_name: str | None = None, alias: str = "champion") -> Wai
         loaded = mlflow.pyfunc.load_model(uri)
         return loaded.unwrap_python_model().wrapped
     except Exception as exc:
-        log.info("no champion at %s (%s); treating this as a first deployment", uri, exc)
-        return None
+        message = str(exc)
+        if any(marker.lower() in message.lower() for marker in _NOT_FOUND_MARKERS):
+            log.info("no champion at %s (%s); treating this as a first deployment", uri, exc)
+            return None
+        raise ChampionLoadError(
+            f"a champion is registered at {uri} but could not be loaded: "
+            f"{type(exc).__name__}: {exc}. Refusing to continue, because treating this as "
+            "a first deployment would promote the challenger without ever comparing it "
+            "against the incumbent."
+        ) from exc

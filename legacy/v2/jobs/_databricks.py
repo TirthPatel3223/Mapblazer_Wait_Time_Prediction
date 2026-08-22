@@ -3,6 +3,18 @@
 Keeping the Spark-specific glue here means the modelling code in `themepark` never imports
 `pyspark`, so the identical logic runs on a laptop or a GitHub Actions runner when the
 Databricks path is unavailable.
+
+Why every entry point repeats a two-line sys.path bootstrap instead of calling one here:
+it is a chicken-and-egg. This module is only importable *after* `jobs/` is on sys.path, so
+whatever puts it there cannot itself be imported. The idiom those files use is
+
+    HERE = Path(globals().get("__file__", sys._getframe().f_code.co_filename)).resolve().parent
+
+because a Databricks serverless `spark_python_task` is executed as
+`exec(compile(source, path, "exec"))`. That leaves `__file__` undefined -- the plain
+`Path(__file__)` form raised `NameError` and failed the first deployed run -- while the
+real path survives as the code object's filename. Modules imported normally, this one
+included, always have `__file__`, so only the four entry points need the fallback.
 """
 
 from __future__ import annotations

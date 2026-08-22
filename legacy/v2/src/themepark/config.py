@@ -15,6 +15,14 @@ import os
 from dataclasses import dataclass, field
 from functools import lru_cache
 
+from .envfile import load as load_dotenv
+
+# At import, because every settings class below reads os.environ the moment it is
+# constructed and there is no earlier hook they all share. Doing it here means no entry
+# point -- job, script or test -- can forget to, and a real environment variable still
+# wins over the file, so CI and Databricks behave exactly as they did before.
+load_dotenv()
+
 
 def _env(name: str, default: str | None = None) -> str:
     value = os.environ.get(name, default)
@@ -59,8 +67,21 @@ class SourceDBSettings:
 
 @dataclass(frozen=True)
 class DatabricksSettings:
-    host: str = field(default_factory=lambda: _env("DATABRICKS_HOST"))
-    token: str = field(default_factory=lambda: _env("DATABRICKS_TOKEN"))
+    """Where the lakehouse is, and -- only from outside it -- how to authenticate.
+
+    `host` and `token` are deliberately optional. This object has two very different
+    users. Code on a laptop or a GitHub runner needs credentials to reach the workspace
+    API. Code running *inside* a Databricks task is already authenticated and uses this
+    object purely to spell table and volume names, where demanding a token it does not
+    need is not "failing loudly" -- it is failing wrongly, which is how the first four
+    tasks died after their imports were fixed.
+
+    So the credentials are validated at the point of use, by `require_api_credentials`,
+    rather than at construction.
+    """
+
+    host: str = field(default_factory=lambda: _opt("DATABRICKS_HOST"))
+    token: str = field(default_factory=lambda: _opt("DATABRICKS_TOKEN"))
     warehouse_id: str = field(default_factory=lambda: _opt("DATABRICKS_WAREHOUSE_ID"))
     catalog: str = field(default_factory=lambda: _opt("DATABRICKS_CATALOG", "themepark"))
     bronze_schema: str = field(default_factory=lambda: _opt("BRONZE_SCHEMA", "bronze"))
@@ -114,6 +135,25 @@ class DatabricksSettings:
     @property
     def promotion_table(self) -> str:
         return self.table(self.gold_schema, "promotion_log")
+
+    def require_api_credentials(self) -> None:
+        """Fail before building a client, not deep inside an SDK call.
+
+        Raised only on the paths that genuinely dial the workspace from outside it.
+        """
+        missing = [
+            name
+            for name, value in (("DATABRICKS_HOST", self.host), ("DATABRICKS_TOKEN", self.token))
+            if not value.strip()
+        ]
+        if missing:
+            raise RuntimeError(
+                f"{' and '.join(missing)} must be set to reach the Databricks API from "
+                "outside the workspace. Local runs read it from .env; CI reads it from "
+                "GitHub Secrets. A task running inside Databricks does not need either -- "
+                "if you are seeing this in a job run, something is calling themepark."
+                "sources.Databricks where it should be using Spark directly."
+            )
 
     def __repr__(self) -> str:
         return f"DatabricksSettings(host={self.host!r}, catalog={self.catalog!r})"
