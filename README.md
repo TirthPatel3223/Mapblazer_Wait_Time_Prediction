@@ -180,12 +180,12 @@ PostgREST exposes the forecast table directly — there is no API service in thi
 deploy, monitor or patch.
 
 ```bash
-curl "$SUPABASE_URL/rest/v1/predictions?\
+curl "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inhrd2J2Z2ZrYXpxZ3ZrenF3eHZnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODczNTQ2NjcsImV4cCI6MjEwMjkzMDY2N30.LNL9hTJEZXTMpaWyjPTIynvJE88WXJuO3ZYUhaRZD5M/rest/v1/predictions?\
 park_name=eq.Disneyland&\
 ts_local=gte.2026-08-24T09:00:00&ts_local=lt.2026-08-24T21:00:00&\
 select=ride_name,ts_local,predicted_wait_min,lower_bound,upper_bound&\
 order=ts_local" \
-  -H "apikey: $SUPABASE_ANON_KEY"
+  -H "apikey: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inhrd2J2Z2ZrYXpxZ3ZrenF3eHZnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODczNTQ2NjcsImV4cCI6MjEwMjkzMDY2N30.LNL9hTJEZXTMpaWyjPTIynvJE88WXJuO3ZYUhaRZD5M"
 ```
 
 ```json

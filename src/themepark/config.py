@@ -70,7 +70,15 @@ class DatabricksSettings:
 
     @property
     def http_path(self) -> str:
-        return f"/sql/1.0/warehouses/{self.warehouse_id}"
+        """SQL warehouse HTTP path, accepting either the bare ID or the whole path.
+
+        The Databricks UI shows this as `/sql/1.0/warehouses/<id>` under "Connection
+        details", and copying the whole line is the obvious thing to do. Naively
+        interpolating that produces `/sql/1.0/warehouses//sql/1.0/warehouses/<id>` and
+        fails every query with an error that points nowhere near the cause, so normalise
+        to the last segment instead.
+        """
+        return f"/sql/1.0/warehouses/{self.warehouse_id.strip().rstrip('/').rsplit('/', 1)[-1]}"
 
     @property
     def server_hostname(self) -> str:

@@ -31,12 +31,31 @@ jobs:
           python-version: "3.11"
           cache: pip
 
+      - name: Check whether credentials are configured
+        # This workflow goes live on a 30-minute cron the moment it is pushed, which is
+        # long before the accounts exist. Without this guard it fails 48 times a day and
+        # mails on every one, and you learn to ignore the notification that eventually
+        # means something real.
+        id: creds
+        env:
+          PG_HOST: ${{ secrets.PG_HOST }}
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+        run: |
+          if [ -n "$PG_HOST" ] && [ -n "$DATABRICKS_HOST" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Ingestion skipped::PG_HOST / DATABRICKS_HOST are not set yet. Add them under Settings > Secrets and variables > Actions to start collecting."
+          fi
+
       - name: Install ingestion dependencies
         # Deliberately not the full requirements file: this job never trains, so it has no
         # need for Prophet or cmdstan, and skipping them cuts the run to well under a minute.
+        if: steps.creds.outputs.configured == 'true'
         run: pip install --quiet pandas pyarrow "psycopg[binary]" databricks-sdk databricks-sql-connector requests
 
       - name: Ingest
+        if: steps.creds.outputs.configured == 'true'
         env:
           PG_HOST: ${{ secrets.PG_HOST }}
           PG_PORT: ${{ secrets.PG_PORT }}

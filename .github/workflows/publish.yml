@@ -33,9 +33,24 @@ jobs:
           python-version: "3.11"
           cache: pip
 
-      - run: pip install --quiet pandas pyarrow databricks-sql-connector databricks-sdk requests
+      - name: Check whether credentials are configured
+        id: creds
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+        run: |
+          if [ -n "$DATABRICKS_HOST" ] && [ -n "$SUPABASE_URL" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Publish skipped::DATABRICKS_HOST / SUPABASE_URL are not set yet."
+          fi
+
+      - if: steps.creds.outputs.configured == 'true'
+        run: pip install --quiet pandas pyarrow databricks-sql-connector databricks-sdk requests
 
       - name: Publish gold tables to Supabase
+        if: steps.creds.outputs.configured == 'true'
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
@@ -45,6 +60,7 @@ jobs:
         run: python jobs/publish.py
 
       - name: Render the dashboard
+        if: steps.creds.outputs.configured == 'true'
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
@@ -54,8 +70,11 @@ jobs:
         run: python jobs/build_dashboard.py --out site/index.html
 
       - uses: actions/configure-pages@v5
+        if: steps.creds.outputs.configured == 'true'
       - uses: actions/upload-pages-artifact@v3
+        if: steps.creds.outputs.configured == 'true'
         with:
           path: site
       - id: deployment
+        if: steps.creds.outputs.configured == 'true'
         uses: actions/deploy-pages@v4

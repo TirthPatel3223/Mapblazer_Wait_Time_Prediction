@@ -22,7 +22,9 @@ variables:
 
 targets:
   prod:
-    mode: production
+    # Deliberately no `mode:`. `production` requires a run_as service principal that a
+    # single-user free workspace does not have, and `development` force-pauses every
+    # schedule -- which would defeat the point of a hands-off pipeline.
     default: true
     workspace:
       root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}

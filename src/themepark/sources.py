@@ -143,12 +143,18 @@ class Databricks:
         out of sync with reality.
         """
         table = self.settings.bronze_table
-        exists = self.scalar(
-            f"SELECT count(*) FROM information_schema.tables "
-            f"WHERE table_catalog='{self.settings.catalog}' "
-            f"AND table_schema='{self.settings.bronze_schema}' AND table_name='wait_times_raw'",
-            0,
-        )
+        # Qualify with the catalog: bare `information_schema` resolves against whatever
+        # catalog the session happens to be in, which on a fresh workspace is none.
+        try:
+            exists = self.scalar(
+                f"SELECT count(*) FROM {self.settings.catalog}.information_schema.tables "
+                f"WHERE table_schema='{self.settings.bronze_schema}' "
+                f"AND table_name='wait_times_raw'",
+                0,
+            )
+        except Exception as exc:
+            log.warning("could not inspect %s (%s); assuming a cold start", table, exc)
+            return 0
         if not exists:
             log.info("bronze table %s does not exist yet; starting from zero", table)
             return 0
