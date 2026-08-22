@@ -15,7 +15,7 @@ jobs:
           python-version: "3.11"
           cache: pip
 
-      - run: pip install --quiet pandas numpy pyarrow holidays "xgboost<4" scikit-learn pytest ruff
+      - run: pip install --quiet pandas numpy pyarrow holidays "xgboost<4" pytest ruff
 
       - name: Secret scan
         # Runs before lint and tests: a leaked credential is the one failure that cannot

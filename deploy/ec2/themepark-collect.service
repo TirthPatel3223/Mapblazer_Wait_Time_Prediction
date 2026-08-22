@@ -1,0 +1,38 @@
+[Unit]
+Description=Theme park wait-time collector (local Postgres -> Databricks)
+Documentation=https://github.com/TirthPatel3223/Mapblazer_Wait_Time_Prediction
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=themepark
+WorkingDirectory=/opt/themepark
+
+# Credentials live here, readable only by the service account. The Databricks token in
+# particular must never be world-readable on a shared VM.
+EnvironmentFile=/opt/themepark/.env
+
+ExecStart=/opt/themepark/.venv/bin/python jobs/collect.py
+
+# The collector is a polite client of a production database: it reads, it is watermarked,
+# and if it cannot finish it simply resumes next time. A stuck run must not pile up.
+TimeoutStartSec=600
+
+# This runs on someone else's server, so it gets the least privilege that still works.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/themepark
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=themepark-collect
+
+[Install]
+WantedBy=multi-user.target

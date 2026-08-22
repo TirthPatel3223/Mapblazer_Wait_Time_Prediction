@@ -110,15 +110,13 @@ forecast.
 ## Architecture
 
 ```
-┌──────────────────────────┐
-│  Upstream Postgres (AWS) │  live, read-only
-└────────────┬─────────────┘
-             │ incremental read, watermark on wait_time_id
-             ▼
-┌──────────────────────────────────────────────────────┐
-│  GitHub Actions — collect.yml   (cron */30)          │
-│  psycopg → Parquet → Databricks SDK files.upload     │
-└────────────┬─────────────────────────────────────────┘
+┌────────────────────────────────────────────────────┐
+│  SOURCE VM (EC2)                                   │
+│    Postgres ── localhost ──► collector (systemd)   │
+│                              every 30 min          │
+│    psycopg → Parquet → Databricks SDK upload       │
+└────────────┬───────────────────────────────────────┘
+             │ OUTBOUND https only — Postgres is never exposed
              ▼
 ┌──────────────────────────────────────────────────────┐
 │  DATABRICKS  (serverless, Unity Catalog, Delta)      │
@@ -143,12 +141,18 @@ forecast.
             └──► time-dependent routing optimiser
 ```
 
-**Why ingestion lives in GitHub Actions.** Databricks Free Edition restricts outbound
-internet to an allowlist, so a Databricks job cannot dial the upstream database or
-Supabase. Every network hop is therefore inbound to Databricks, brokered by a runner. On
-a paid workspace this would be a Lakeflow pipeline — though separating ingestion from
-compute is defensible regardless, since an ingestion failure then cannot consume training
-capacity.
+**Why ingestion pushes instead of pulls.** The source database runs on a VM alongside
+other services. Pulling would mean exposing Postgres to the internet for a rotating set of
+runner IPs; pushing means the VM makes an ordinary outbound HTTPS call it can already
+make. `listen_addresses` stays `localhost`, no security-group rule changes, no SSH tunnel,
+and credentials never cross the internet. Databricks Free Edition also blocks outbound
+internet, so it could not have dialled the database itself in any case.
+
+**Bootstrapping without that VM.** `jobs/seed_from_csv.py` writes a historical extract
+into the landing volume in the identical schema the collector emits, so the entire
+pipeline can be deployed and verified before live ingestion exists. The collector's
+watermark then resumes exactly where the seed stopped — no gap, no overlap, no manual
+reconciliation.
 
 ---
 
@@ -218,7 +222,10 @@ src/themepark/          the library — imported identically by laptop, runner a
   verify.py             production accuracy: predictions vs what happened
   dashboard*.py         static dashboard generator
 
-jobs/                   thin entry points (Databricks tasks + runner jobs)
+jobs/                   thin entry points (Databricks tasks, VM collector, runner jobs)
+  collect.py            source Postgres → Parquet → Unity Catalog volume
+  seed_from_csv.py      warm-start the lakehouse from a historical extract
+deploy/ec2/             systemd unit, timer and installer for the source VM
 .github/workflows/      collect · train · publish · ci
 databricks.yml          Asset Bundle — the weekly job as code
 infra/supabase_schema.sql
@@ -248,9 +255,13 @@ withheld future week — the same thing the scheduled job does every Sunday.
 
 ```bash
 databricks bundle deploy --target prod
-gh workflow run collect.yml -f drain=true    # one-time backfill
+python jobs/seed_from_csv.py                 # warm start from the local extract
 databricks bundle run themepark_weekly
 ```
+
+Live ingestion is attached separately, on the VM that hosts the source database — see
+[`deploy/ec2/`](deploy/ec2). `scripts/check_upstream.py` verifies connectivity layer by
+layer before you trust it.
 
 ---
 
