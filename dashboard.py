@@ -353,8 +353,10 @@ def build_page(kpis: pd.DataFrame, preds: pd.DataFrame) -> str:
     )
     daily_table = data_table(
         ["Date", "Actual (min)", "Predicted (min)"],
+        # strict: all three come from the same groupby index, so a length mismatch would
+        # mean the table had silently dropped rows the chart still plotted.
         [(lab, fmt(a), fmt(p)) for lab, a, p in
-         zip(daily_labels, daily["actual_wait_min"], daily["predicted_wait_min"])],
+         zip(daily_labels, daily["actual_wait_min"], daily["predicted_wait_min"], strict=True)],
     )
 
     # Chart B: mean wait by local hour (champion)

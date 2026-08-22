@@ -11,7 +11,12 @@ filterwarnings = ["ignore::DeprecationWarning", "ignore::FutureWarning"]
 
 [tool.ruff]
 line-length = 100
-include = ["pipeline.py", "publish.py", "tests/**/*.py"]
+# Explicit, because the working tree also holds the superseded v1/v2 code and the local
+# test suite, neither of which is published.
+include = ["pipeline.py", "publish.py", "dashboard.py", "deploy/ec2/ingest.py", "tests/**/*.py"]
+# tests/ is gitignored but still worth linting locally; the include list above is what
+# actually bounds the check.
+respect-gitignore = false
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]

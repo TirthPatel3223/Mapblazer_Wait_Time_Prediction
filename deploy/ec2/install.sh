@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 #
-# Install the wait-time collector on the VM that hosts the source Postgres.
+# Install the wait-time ingestion agent on the EC2 instance that hosts the source
+# Postgres.
 #
-# The collector runs here rather than in the cloud so that the connection to Postgres is
-# local. Nothing about the database has to be exposed: no inbound firewall rule, no
-# `listen_addresses = '*'`, no SSH tunnel. The only network access needed is outbound
-# HTTPS to Databricks, which this box already has.
+# It runs here rather than in the cloud so the database connection is local. Nothing
+# about Postgres has to be exposed: no inbound firewall rule, no `listen_addresses = '*'`,
+# no SSH tunnel. The only network access needed is outbound HTTPS to Databricks, which
+# this box already has.
 #
 # Safe to re-run: it upgrades the code and restarts the timer without touching .env.
 #
@@ -33,8 +34,8 @@ PY
 echo "ok: $("$PYTHON_BIN" --version)"
 
 say "Creating the service account"
-# A dedicated, non-login account. The collector never needs a shell, and this keeps the
-# Databricks token off any human user's dotfiles.
+# A dedicated, non-login account. Ingestion never needs a shell, and this keeps the
+# Databricks token out of any human user's dotfiles.
 if ! id -u "$SERVICE_USER" >/dev/null 2>&1; then
     useradd --system --shell /usr/sbin/nologin --home-dir "$APP_DIR" "$SERVICE_USER"
     echo "created $SERVICE_USER"
@@ -54,19 +55,17 @@ else
 fi
 
 say "Building the virtualenv"
-# Only the ingestion dependencies. No Prophet, no XGBoost, no cmdstan -- training happens
-# in Databricks, and this box belongs to someone else. Keep the footprint small.
 "$PYTHON_BIN" -m venv "$APP_DIR/.venv"
 "$APP_DIR/.venv/bin/pip" install --quiet --upgrade pip
-"$APP_DIR/.venv/bin/pip" install --quiet \
-    pandas pyarrow "psycopg[binary]" databricks-sdk databricks-sql-connector requests
-echo "installed $("$APP_DIR/.venv/bin/pip" list 2>/dev/null | wc -l) packages"
+"$APP_DIR/.venv/bin/pip" install --quiet -r "$APP_DIR/deploy/ec2/requirements.txt"
+echo "installed the ingestion dependencies only (no Prophet, XGBoost or cmdstan)"
 
 say "Preparing configuration"
 if [[ ! -f "$APP_DIR/.env" ]]; then
     cat > "$APP_DIR/.env" <<'ENVEOF'
-# Postgres is on this machine, so it is reached over the loopback interface.
-# Nothing here needs to be exposed to the network.
+# Postgres is on this machine, so it is reached over the loopback interface. Nothing
+# here needs to be exposed to the network. A read-only role is sufficient: ingestion
+# never writes, locks or runs DDL against this database.
 PG_HOST=localhost
 PG_PORT=5432
 PG_DATABASE=
@@ -75,14 +74,15 @@ PG_PASSWORD=
 # Local connections are not usually TLS-terminated; they never leave the host.
 PG_SSLMODE=prefer
 
+# Optional, only if the upstream table names differ from the defaults.
+# PG_WAIT_TIMES_TABLE=wait_times
+# PG_ATTRACTIONS_TABLE=attractions
+# PG_THEMEPARKS_TABLE=themeparks
+
+# Needs CAN_USE on the SQL warehouse and write access to themepark.bronze.
 DATABRICKS_HOST=
 DATABRICKS_TOKEN=
 DATABRICKS_WAREHOUSE_ID=
-DATABRICKS_CATALOG=themepark
-
-# Optional. Lets the collector record a heartbeat the dashboard reads.
-SUPABASE_URL=
-SUPABASE_SERVICE_KEY=
 ENVEOF
     echo "wrote $APP_DIR/.env  <-- FILL THIS IN"
 else
@@ -95,10 +95,10 @@ chown -R "$SERVICE_USER:$SERVICE_USER" "$APP_DIR"
 chmod 600 "$APP_DIR/.env"
 
 say "Installing the systemd timer"
-install -m 644 "$APP_DIR/deploy/ec2/themepark-collect.service" /etc/systemd/system/
-install -m 644 "$APP_DIR/deploy/ec2/themepark-collect.timer"   /etc/systemd/system/
+install -m 644 "$APP_DIR/deploy/ec2/themepark-ingest.service" /etc/systemd/system/
+install -m 644 "$APP_DIR/deploy/ec2/themepark-ingest.timer"   /etc/systemd/system/
 systemctl daemon-reload
-systemctl enable --now themepark-collect.timer
+systemctl enable --now themepark-ingest.timer
 echo "timer enabled"
 
 cat <<EOF
@@ -109,17 +109,17 @@ Installed. Two things left:
   1. Fill in the credentials
        sudo -e $APP_DIR/.env
 
-  2. Verify the database is reachable from this host, then run once
-       sudo -u $SERVICE_USER $APP_DIR/.venv/bin/python $APP_DIR/scripts/check_upstream.py
-       sudo systemctl start themepark-collect.service
-       journalctl -u themepark-collect -n 50 --no-pager
+  2. Check both ends are reachable before trusting the timer, then run once
+       sudo -u $SERVICE_USER $APP_DIR/.venv/bin/python $APP_DIR/deploy/ec2/ingest.py --dry-run
+       sudo systemctl start themepark-ingest.service
+       journalctl -u themepark-ingest -n 50 --no-pager
 
 Useful afterwards:
-  systemctl list-timers themepark-collect\*     # when it next fires
-  journalctl -u themepark-collect -f            # follow the logs
-  systemctl disable --now themepark-collect.timer   # stop it entirely
+  systemctl list-timers themepark-ingest\*     # when it next fires
+  journalctl -u themepark-ingest -f            # follow the logs
+  systemctl disable --now themepark-ingest.timer   # stop it entirely
 
-Backfill in one pass instead of waiting for the timer:
-  sudo -u $SERVICE_USER $APP_DIR/.venv/bin/python $APP_DIR/jobs/collect.py --drain
+Backfill in one pass instead of one batch per hour:
+  sudo -u $SERVICE_USER $APP_DIR/.venv/bin/python $APP_DIR/deploy/ec2/ingest.py --drain
 ────────────────────────────────────────────────────────────────────
 EOF

@@ -1,0 +1,24 @@
+[Unit]
+Description=Run theme park ingestion hourly
+Documentation=https://github.com/TirthPatel3223/Mapblazer_Wait_Time_Prediction
+
+[Timer]
+OnBootSec=5min
+# Hourly, not every few minutes. Each run wakes a serverless SQL warehouse, and on a
+# metered workspace the wake-ups cost more than the data is worth: the feed has
+# 30-minute granularity and the model retrains weekly, so hourly is already far fresher
+# than anything downstream reads. Widen this to 6h if the compute quota is tight --
+# nothing is lost, the next run just carries a larger batch.
+OnUnitActiveSec=1h
+
+# Spread the start within the window so ingestion never lines up exactly with whatever
+# else this box runs on the hour.
+RandomizedDelaySec=300
+
+# Catch up after a reboot or an outage rather than silently skipping the window.
+Persistent=true
+
+Unit=themepark-ingest.service
+
+[Install]
+WantedBy=timers.target

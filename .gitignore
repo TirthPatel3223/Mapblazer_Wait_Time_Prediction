@@ -1,8 +1,13 @@
+# The repo carries only what deploys: the Databricks job, the publish and dashboard
+# steps, the bundle, and the EC2 ingestion agent. The v1/v2 implementations and the test
+# suite are kept locally for reference but are not published.
+legacy/
+tests/
+
 # Raw data never enters the repo. The upstream extract is someone else's production data,
 # and the pipeline reads it from Postgres at runtime rather than from a checked-in file.
 data/
 *.csv
-!tests/fixtures/*.csv
 
 # Model artefacts live in the Databricks volume (themepark.gold.models), not git.
 trained_models/

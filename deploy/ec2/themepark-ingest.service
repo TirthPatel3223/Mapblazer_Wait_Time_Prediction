@@ -1,5 +1,5 @@
 [Unit]
-Description=Theme park wait-time collector (local Postgres -> Databricks)
+Description=Theme park wait-time ingestion (local Postgres -> Databricks bronze)
 Documentation=https://github.com/TirthPatel3223/Mapblazer_Wait_Time_Prediction
 After=network-online.target postgresql.service
 Wants=network-online.target
@@ -10,14 +10,16 @@ User=themepark
 WorkingDirectory=/opt/themepark
 
 # Credentials live here, readable only by the service account. The Databricks token in
-# particular must never be world-readable on a shared VM.
+# particular is equivalent to workspace access and must never be world-readable on a
+# shared VM.
 EnvironmentFile=/opt/themepark/.env
 
-ExecStart=/opt/themepark/.venv/bin/python jobs/collect.py
+ExecStart=/opt/themepark/.venv/bin/python /opt/themepark/deploy/ec2/ingest.py
 
-# The collector is a polite client of a production database: it reads, it is watermarked,
-# and if it cannot finish it simply resumes next time. A stuck run must not pile up.
-TimeoutStartSec=600
+# A run reads one bounded batch and merges it. If it cannot finish, it resumes next time
+# from the watermark in bronze -- so a stuck run should be killed rather than left to
+# pile up behind the next timer tick.
+TimeoutStartSec=900
 
 # This runs on someone else's server, so it gets the least privilege that still works.
 NoNewPrivileges=true
@@ -32,7 +34,7 @@ LockPersonality=true
 
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=themepark-collect
+SyslogIdentifier=themepark-ingest
 
 [Install]
 WantedBy=multi-user.target

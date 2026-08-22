@@ -9,28 +9,25 @@ that claims not to have any. Ordered by how much they would change the numbers.
 
 ### 1. No ride-status signal (largest known gap)
 
-The model has no input for "this attraction is closed for refurbishment." Two of the ten
-worst-predicted attractions in the last verification run were closures:
+The model has no input for "this attraction is closed for refurbishment." The signature
+is unmistakable in the per-ride errors: bias equal to MAE with a mean actual of zero, on
+attractions that were shut for the whole holdout window. The model confidently predicts a
+normal queue for a ride that was not operating.
 
-| Attraction | Production MAE | Bias | Mean actual |
-|---|---|---|---|
-| Pirates of the Caribbean | 18.49 | **+18.49** | **0.00** |
-| Buzz Lightyear Astro Blasters | 17.22 | **+17.22** | **0.00** |
+This is not really a modelling failure — it is a missing feature. The upstream
+`attractions` table carries a `status` column that neither the ingestion agent nor the
+pipeline currently reads.
 
-Bias equal to MAE with a mean actual of zero is the signature: the model confidently
-predicts a normal queue for a ride that was shut all week. This is not a modelling
-failure so much as a missing feature — the upstream `attractions` table carries a
-`status` column that the pipeline does not currently read.
-
-**Fix:** join `attractions.status` into silver and suppress forecasts for non-operating
-rides, or add it as a feature. Roughly half a day.
+**Fix:** add `status` to the ingestion query and to bronze, then either suppress
+forecasts for non-operating rides in silver or feed it in as a feature. Roughly half a
+day, most of it a bronze schema change and a backfill.
 
 ### 2. No lag or autoregressive features
 
-All four families are pure calendar-clock functions: hour, day of week, month, holiday
-flag, and cyclical encodings. There is no lag-1 wait, no rolling mean, no park-level
-concurrent load, no weather, and none of the `person_capacity` / `show_duration` columns
-available in the upstream `attractions` table.
+All four families are pure calendar-clock functions: hour, minute, day of week, month,
+holiday flag, and cyclical encodings. There is no lag-1 wait, no rolling mean, no
+park-level concurrent load, no weather, and none of the `person_capacity` /
+`show_duration` columns available upstream.
 
 This is the single largest available accuracy lift and it is deliberately out of scope:
 lags make a 7-day-ahead forecast recursive, which is a different and much larger piece of
@@ -39,91 +36,118 @@ autoregressive within it — is the sensible next step.
 
 ### 3. Zero-inflation is handled by the metric, not the model
 
-About 37% of observations are exactly zero even after the timezone fix (down from 70%
-before it — most of those "zeros" were closed-park hours being trained on). A single
-regressor is being asked to model both "is there a queue at all" and "how long is it."
+About 37 percent of silver observations are exactly zero even after the timezone fix. A
+single regressor is being asked to model both "is there a queue at all" and "how long is
+it."
 
 A two-stage model — classify operating/non-zero, then regress conditional on non-zero —
-is the standard treatment. The segmented scorecard (`nonzero_actual`, `long_queues`)
-exists so this weakness is visible rather than hidden inside an average.
+is the standard treatment. The segmented KPIs (`high_wait_mae`, `peak_hours_mae`) exist
+so this weakness stays visible instead of disappearing into an average.
 
 ---
 
 ## Open — operational
 
-### 4. Bronze load rescans the whole landing volume
+### 4. The landing volume grows without bound
 
-`jobs/bronze_load.py` reads every Parquet file in the volume and anti-joins on
-`wait_time_id`. Correct and idempotent, but the scan grows with history. At current
-volume (~20k rows/week) this is fine for well over a year; past that, partition-prune on
-the `dt=` prefix or archive loaded files.
+`deploy/ec2/ingest.py` merges each batch from its own Parquet file by exact path, so
+nothing rescans the volume and the merge cost does not grow with history. But the files
+are never removed either. At roughly 5 MB/week that is fine for years; past that, expire
+`dt=` prefixes older than a few months. Bronze is the audit trail, so deleting landed
+files loses nothing.
 
 ### 5. Park operating hours are hard-coded
 
-`themepark.filters.PARK_CONSTRAINTS` carries fixed local open/close hours per park. Real
-parks vary hours by season and by day. Wrong bounds do not corrupt training — they only
-trim the forecast grid — but a park extending summer hours will have its late evening
+`PARK_HOURS` in `pipeline.py` carries fixed local open/close hours per park. Real parks
+vary hours by season and by day. Wrong bounds do not corrupt training — they only trim
+the forecast grid — but a park extending its summer hours will have its late evening
 unforecast until the constant is updated. Inferring the window per park per weekday from
 observed activity is the fix.
 
-### 6. Git history still contains the v1 model artefacts
+### 6. No automated test gate in CI
+
+The unit and failure-path suite is developed and run locally; it is not published in this
+repository, which carries only what deploys. CI therefore checks lint and imports, not
+behaviour. The failure paths it covers — a failed quality check dropping `_current` while
+`_last` survives, the fallback refreshing the forecast on a failed run, a first-ever run
+with nothing to fall back to — are exactly the ones a regression would be quietest about,
+so they have to be re-run by hand before a change to the promotion or fallback logic
+ships.
+
+### 7. Git history still contains the v1 model artefacts
 
 `trained_models/` (422 MB, 245 JSON files, no LFS) is untracked going forward, but it is
-still in the history and on the remote — the repo clones at ~122 MB. Purging it needs a
-history rewrite and a force-push, which has not been done because it is destructive and
-rewrites commit hashes anyone else may have pulled.
+still in the history and on the remote — the repo clones at roughly 122 MB. Purging it
+needs a history rewrite and a force-push, which has not been done because it is
+destructive and rewrites commit hashes anyone else may have pulled.
+
+### 8. The Supabase keepalive has no margin
+
+Supabase pauses a free project after 7 days without a database request, and the publish
+workflow runs every 7 days. Any skipped or failed Sunday can therefore let the serving
+API go to sleep, which looks like an outage rather than a paused project. A manual
+`workflow_dispatch` wakes it. A scheduled read midweek would remove the coincidence.
 
 ---
 
 ## Deliberate trade-offs
 
-### 7. Hyperparameter search removed rather than fixed
+### 9. Hyperparameter search removed rather than fixed
 
-v1 used `RandomizedSearchCV(cv=3)`, which is random K-Fold — on a time series, future
+v1 used `RandomizedSearchCV(cv=3)`, which is random K-fold — on a time series, future
 rows leak into the validation folds and the selected parameters are optimistic. The fix
 would be `TimeSeriesSplit`. Instead the search was dropped entirely in favour of fixed
 conservative parameters (`max_depth=6, n_estimators=200`).
 
 That removes the leak, cuts training time substantially, and shrinks the per-ride
-artefacts from 3.8 MB to a fraction of that. A proper rolling-origin search is worth
-adding once there is more than the current ~9 months of history.
+artefacts considerably. A proper rolling-origin search is worth adding once there is more
+than the current nine months of history.
 
-### 8. Ingestion runs on GitHub Actions, not Databricks
+### 10. Ingestion and publishing both run outside Databricks
 
-Databricks Free Edition restricts outbound internet to an allowlist of trusted domains,
-so a Databricks job cannot reach the upstream Postgres or Supabase. Every network hop is
-therefore inbound to Databricks, brokered by a runner.
+Databricks Free Edition restricts outbound internet, so a job cannot reach the upstream
+Postgres or Supabase. Every network hop is therefore initiated from outside: the EC2
+agent pushes bronze in, and GitHub Actions pulls gold out.
 
-On a paid workspace this would be a Lakeflow ingestion pipeline. The separation is
-defensible on its own terms — ingestion failures cannot consume training compute — but it
-is a constraint, not a preference.
+On a paid workspace ingestion would be a Lakeflow pipeline. The separation is defensible
+on its own terms — an ingestion failure cannot consume training compute, and the source
+database is never exposed to the internet — but it is a constraint, not a preference.
 
-### 9. Point forecasts are precomputed, not served on demand
+### 11. Ingestion cadence is set by warehouse cost, not by data freshness
+
+Each ingestion run wakes a serverless SQL warehouse, so the hourly timer is a compute-quota
+decision rather than a data one. The feed has 30-minute granularity and the model retrains
+weekly, so nothing downstream notices; but if this ever fed a real-time consumer, the
+warehouse round trip per batch would be the first thing to replace.
+
+### 12. Point forecasts are precomputed, not served on demand
 
 The consumer is a time-dependent routing solver, which needs the entire cost surface
 (every ride at every arrival time) rather than one point per request. A weekly batch into
 an indexed Postgres table is the right shape, and it means no model-serving endpoint has
 to stay warm. The cost is that an intra-week correction requires a manual job run.
 
-### 10. Alerting is email plus a staleness banner
+### 13. Alerting is email plus visible run provenance
 
 GitHub emails on workflow failure, Databricks emails on job failure, and the dashboard
-turns red if the newest run is more than 36 hours old. There is no paging and no
-on-call. For a system whose worst failure mode is serving last week's forecast for
-another week, that is proportionate — but it is the first thing that would change if
-anything depended on this operationally.
+carries the run id, the run status (`fresh_model`, `kept_previous_model`,
+`fallback_after_failure`) and the publish timestamp, so a fallback week is visibly a
+fallback. There is no paging and no on-call. For a system whose worst failure mode is
+serving last week's forecast for another week, that is proportionate — but it is the
+first thing that would change if anything depended on this operationally.
 
 ---
 
 ## Fixed in this version
 
-Both were found by auditing the v1 evaluation path; see [`legacy/v1/`](legacy/v1) for the
-original code and [`tests/`](tests) for the regression tests that pin them.
+Both were found by auditing the v1 evaluation path.
 
 | | Defect | Effect |
 |---|---|---|
-| **1** | Park-local operating hours applied to UTC timestamps | Kept 00:00–15:00 local, discarded the entire evening peak. Only **47%** of wait-minute mass survived, versus **95%** now. Mean wait in the training set was 7.06 min; it is actually 15.30. `dayofweek` and `is_weekend` were wrong for every evening observation. |
+| **1** | Park-local operating hours applied to UTC timestamps | Kept 00:00-15:00 local and discarded the entire evening peak. Mean wait in the training set read 7.06 min; it is actually 15.4. `dayofweek` and `is_weekend` were wrong for every evening observation. |
 | **2** | Two different ride-name sanitizers between training and evaluation | 43 of 120 rides silently resolved to nothing and were dropped from every reported metric — the excluded set averaged 10.03 min wait versus 5.88 for those kept. Every v1 headline number was computed on a low-wait subsample. |
 
-Reproduce the first with `python scripts/validate_timezone_fix.py`, which runs the v1
-filter and the corrected one side by side against the same extract.
+The first is pinned by a quality check that runs on every pipeline run: the local hour
+with the highest mean wait must fall between 11:00 and 20:00, which an inverted timezone
+conversion cannot satisfy. The second is pinned by there being exactly one ride-key
+function in `pipeline.py`, used by training, scoring and the forecast grid alike.

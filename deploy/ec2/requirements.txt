@@ -1,0 +1,7 @@
+# Everything the ingestion box needs, and nothing else. No Prophet, no XGBoost, no
+# cmdstan: training happens in Databricks, and this machine is not ours to fill up.
+pandas>=2.0
+pyarrow>=14.0
+psycopg[binary]>=3.1
+databricks-sql-connector>=3.0
+requests>=2.31

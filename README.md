@@ -10,6 +10,38 @@ costs $0/month.
 
 ## How it works
 
+Three components, each running where it has to:
+
+    EC2 (source database)  ->  Databricks (bronze -> gold)  ->  Supabase + GitHub Pages
+    deploy/ec2/ingest.py       pipeline.py                      publish.py, dashboard.py
+    hourly                     Sunday 06:00 UTC                 Sunday 08:00 UTC
+
+### Ingestion: the EC2 agent
+
+The upstream wait-time database lives on an AWS EC2 instance that is not ours, so the
+agent runs *there* and pushes outbound rather than being pulled from — see
+[`deploy/ec2/`](deploy/ec2) for the full deployment. Pulling would mean opening Postgres
+to the internet for a rotating set of runner IPs; pushing means the database connection
+stays on the loopback interface, no firewall rule changes, and the only network access
+needed is outbound HTTPS.
+
+One run, hourly, on a systemd timer:
+
+    1. watermark   MAX(wait_time_id) already in themepark.bronze.wait_times_raw
+    2. read        SELECT ... FROM wait_times JOIN attractions JOIN themeparks
+                   WHERE wait_time_id > watermark ORDER BY wait_time_id LIMIT 200000
+    3. land        write the batch as Parquet into /Volumes/themepark/bronze/landing/
+    4. merge       MERGE that file into bronze on wait_time_id, insert-only
+
+The watermark is read from bronze itself rather than from a cursor file on the box, so
+it always describes what actually landed. A run killed at any point re-reads the same
+range next time and the `MERGE ... WHEN NOT MATCHED` absorbs the overlap; there is no
+local state that can drift out of sync and nothing to repair by hand. Bronze is
+append-only and never edited — it is the audit trail, and every correction happens
+downstream in silver.
+
+### Training and serving: the weekly Databricks job
+
 The entire weekly job is one Python file, `pipeline.py`, executed as a single
 Databricks serverless task every Sunday at 06:00 UTC:
 
@@ -108,21 +140,35 @@ pushed. On Sundays at 08:00 UTC (or on demand) a GitHub Actions workflow:
     dashboard.py           gold _last -> static site/index.html (inline SVG, no JS)
     databricks.yml         asset bundle: one job, one task, one environment
     supabase_schema.sql    serving tables, staging twins, swap RPC, grants
-    tests/                 unit + integration tests, including every failure path
+    deploy/ec2/            the ingestion agent installed on the source-database host
+
+The repository carries only what deploys. The superseded v1/v2 implementations and the
+local test suite are kept outside it.
 
 ## Running it
 
+Ingestion, on the EC2 instance that hosts the source database:
+
+    sudo bash deploy/ec2/install.sh            # then fill in /opt/themepark/.env
+    python deploy/ec2/ingest.py --dry-run      # reports the gap, writes nothing
+    python deploy/ec2/ingest.py --drain        # backfill in one pass
+
+Training and serving, from anywhere:
+
     pip install -r requirements.txt -r requirements-dev.txt
-    pytest -q                                  # includes the failure-path proofs
+    ruff check .
     databricks bundle validate --target prod
     databricks bundle deploy   --target prod
     databricks bundle run themepark_weekly --target prod
     python publish.py                          # push serving tables to Supabase
     python dashboard.py --out site/index.html  # render the dashboard
 
-Secrets live in `.env` at the repo root (gitignored); see `.env.example` for the
-keys, which are also the GitHub Actions secret names. `supabase_schema.sql` must be
-run once in the Supabase SQL editor before the first publish.
+Secrets live in `.env` at the repo root (gitignored); see `.env.example` for the keys,
+which are also the GitHub Actions secret names. The EC2 agent has its own
+`/opt/themepark/.env` with the `PG_*` credentials — those exist only on that machine,
+because nothing outside it ever touches the source database.
+`supabase_schema.sql` must be run once in the Supabase SQL editor before the first
+publish.
 
 ## Querying the forecast API
 
