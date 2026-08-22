@@ -165,14 +165,17 @@ class SupabaseREST:
         return r.json() if r.text else None
 
     def insert_df(self, table: str, df: pd.DataFrame) -> None:
-        # Serialize chunk by chunk: the predictions table carries every candidate's
+        # Serialize chunk by chunk: the predictions table carries every model's
         # backtest rows, and one records list for all of them wastes memory.
+        # resolution=ignore-duplicates makes each chunk idempotent: if the edge drops
+        # a kept-alive connection after Postgres committed and the HTTP client
+        # resends the chunk, the resend must not collide with its own first copy.
         for start in range(0, len(df), CHUNK_ROWS):
             chunk = to_records(df.iloc[start : start + CHUNK_ROWS])
             r = self.session.post(
                 f"{self.base}/{table}",
                 json=chunk,
-                headers={"Prefer": "return=minimal"},
+                headers={"Prefer": "return=minimal,resolution=ignore-duplicates"},
                 timeout=300,
             )
             self._raise_readably(r, f"insert into {table} (rows {start}..{start + len(chunk)})")

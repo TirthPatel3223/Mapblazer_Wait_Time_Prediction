@@ -60,10 +60,10 @@ class TestFirstRunSuccess:
         assert (fc["predicted_wait_min"] >= 0).all()
 
         # The forecast is the champion's alone; the backtest carries every candidate
-        # so the dashboard can compare their test-set error distributions.
+        # plus the baseline so the dashboard can compare their error distributions.
         assert fc["model_name"].nunique() == 1
         bt = preds[preds["row_kind"] == "backtest"]
-        assert set(bt["model_name"].unique()) == set(pipeline.CANDIDATES)
+        assert set(bt["model_name"].unique()) == {*pipeline.CANDIDATES, pipeline.MODEL_BASELINE}
 
         kpis = env.read(pipeline.KPI_TABLE + pipeline.LAST)
         assert set(kpis["model"].unique()) == {

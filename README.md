@@ -1,59 +1,114 @@
 # Theme Park Wait-Time Forecasting
 
-Weekly retrained wait-time forecasts for 109 attractions across 5 California parks, at
-30-minute resolution, seven days ahead. Runs unattended on Databricks Free Edition,
-serves through Supabase and GitHub Pages, and costs $0/month.
+Weekly retrained wait-time forecasts for 109 attractions across 5 California theme
+parks (Disneyland, Disney California Adventure, Universal Studios Hollywood, SeaWorld
+San Diego, Six Flags Magic Mountain), at 30-minute resolution, seven days ahead. Runs
+unattended on Databricks Free Edition, serves through Supabase and GitHub Pages, and
+costs $0/month.
 
-[Live dashboard](https://TirthPatel3223.github.io/Mapblazer_Wait_Time_Prediction/) |
-[Known issues](KNOWN_ISSUES.md)
+[Live dashboard](https://TirthPatel3223.github.io/Mapblazer_Wait_Time_Prediction/)
 
-## Architecture
+## How it works
 
-One Python file, `pipeline.py`, runs as a single Databricks serverless job task every
-Sunday and does the whole thing end to end:
+The entire weekly job is one Python file, `pipeline.py`, executed as a single
+Databricks serverless task every Sunday at 06:00 UTC:
 
-    bronze.wait_times_raw
-      -> silver.wait_times_current      clean, timezone-correct, 30-minute grid
-      -> train prophet_fleet, xgb_global, xgb_local_fleet (fixed hyperparameters)
-      -> KPIs on a chronological 80/20 holdout, vs a per-ride mean baseline
-      -> gold.kpis_current + gold.predictions_current (forecast + backtest rows)
-      -> quality checks
-      -> promote every _current table to _last (atomic DEEP CLONE)
-      -> champion.json pointer update in /Volumes/themepark/gold/models
+    themepark.bronze.wait_times_raw          842,539 raw queue observations
+      |
+      |  clean: drop duplicate readings, sentinel waits (>=900), negative waits,
+      |  known-bad attractions; convert UTC to America/Los_Angeles FIRST, then
+      |  filter to each park's local operating hours; canonical ride keys;
+      |  resample to a fixed 30-minute grid; drop rides with under 100 observations
+      v
+    themepark.silver.wait_times_current      ~390K rows, 109 attractions
+      |
+      |  chronological 80/20 split (never random: random folds leak the future)
+      |  train three candidates with fixed hyperparameters:
+      |    prophet_fleet    one Prophet per ride (flat growth, daily+weekly
+      |                     seasonality, US holidays, 80% intervals)
+      |    xgb_global       one XGBoost across all rides (ride as categorical)
+      |    xgb_local_fleet  one XGBoost per ride
+      |  plus a per-ride historical-mean baseline as the floor
+      v
+    themepark.gold.kpis_current              MAE, RMSE, within-10-min, severe-miss,
+                                             bias, high-wait MAE, peak-hours MAE
+                                             per model, champion flagged
+    themepark.gold.predictions_current       7-day forecast (champion) +
+                                             test-set backtest rows for every model
+                                             and the baseline (predicted, actual,
+                                             error), row_kind distinguishes them
 
-Serving reads the `_last` tables only. A failed or half-finished run can therefore
-never take down the dashboard: any failure drops the `_current` tables, leaves `_last`
-untouched, re-scores the upcoming week with the previous champion (Step 5c fallback) so
-the forecast window stays fresh, and still fails the job so the failure alerts.
+### The current / last serving pattern
 
-The champion model is promoted only if its holdout MAE beats the incumbent's recorded
-MAE by at least 1 percent; otherwise the previous model is reloaded from plain-file
-artifacts (Prophet JSON, XGBoost `save_model`) and re-scored. No MLflow, no pickles,
-no registry: a number compared against a number in a table, plus a JSON pointer.
+Every silver and gold table exists twice: `_current` and `_last`. A run writes only
+`_current`; quality checks run against `_current`; and only when everything passes are
+the tables promoted `_current -> _last` with atomic `CREATE OR REPLACE ... DEEP CLONE`
+commits. Supabase and the dashboard read `_last` only, so a failed or half-finished
+run can never take down a working dashboard.
 
-Databricks Free Edition jobs have no outbound internet, so `publish.py` (GitHub
-Actions, Sundays 08:00 UTC, or a laptop) pulls the gold `_last` tables over the SQL
-warehouse, pushes both to Supabase atomically through the `publish_serving()` RPC (one
-Postgres transaction), and `dashboard.py` renders the static dashboard for Pages.
+Quality checks include: silver row count vs last week, attraction count, zero-wait
+share, null checks, and a timezone tripwire (the local hour with the highest mean wait
+must fall between 11:00 and 20:00 -- inverted timezone handling relocates the
+afternoon peak into the late evening); gold checks cover model presence, finite MAEs,
+champion-beats-baseline, forecast ride coverage, bound ordering, and row-count bands.
 
-## Layout
+### Champion promotion and rollback
 
-    pipeline.py            the entire Databricks job (single spark_python_task)
-    publish.py             gold _last -> Supabase, atomic swap via RPC
-    dashboard.py           gold _last -> static site/index.html (inline SVG, no JS)
-    databricks.yml         asset bundle: one job, one task, one environment
-    supabase_schema.sql    serving tables, staging twins, swap RPC, grants (run once)
-    tests/                 unit + integration tests incl. every failure path
-    legacy/                previous implementations, kept for reference only
+Model artifacts are plain files in the `themepark.gold.models` volume -- Prophet
+serialized to JSON per ride, XGBoost via `save_model` -- written to an immutable
+`runs/<run_id>/` directory with a manifest. A tiny `champion.json` pointer names the
+serving run and is written last, only after the tables have been promoted.
+
+A newly trained model ships only if its holdout MAE beats the incumbent champion's
+recorded MAE by at least 1 percent. Otherwise the incumbent is reloaded from disk and
+re-scored over the upcoming week, so the forecast window is fresh either way. Rolling
+back is editing `champion.json` to an earlier `run_id`.
+
+### Failure behavior
+
+Any failure -- a quality check, a training error, unreadable bronze -- drops the
+`_current` tables, leaves `_last` untouched, re-scores the upcoming week with the
+previous champion (validated against the same prediction checks) so the dashboard
+never serves a forecast window that has slid into the past, and still fails the job
+so the failure alerts. Both gold tables carry `run_id`, `run_status` (`fresh_model`,
+`kept_previous_model`, or `fallback_after_failure`) and `generated_at`, so a fallback
+week is visibly a fallback. A first-ever run with nothing to fall back to changes
+nothing and says so.
+
+### Serving
+
+Databricks Free Edition jobs have no outbound internet, so serving is pulled, not
+pushed. On Sundays at 08:00 UTC (or on demand) a GitHub Actions workflow:
+
+1. reads `gold.kpis_last` and `gold.predictions_last` over the Databricks SQL
+   warehouse (`publish.py`),
+2. loads both into Supabase staging tables in idempotent chunks, then swaps staging
+   into serving with a table-rename inside a single Postgres transaction
+   (`publish_serving()` in `supabase_schema.sql`) -- readers always see one
+   consistent pair, and Supabase's PostgREST exposes the tables as a public
+   read-only REST API,
+3. renders the dashboard (`dashboard.py`) -- a single static HTML file with inline
+   SVG charts, no JavaScript, built from the same data -- and deploys it to GitHub
+   Pages. The dashboard deploys even if the Supabase push fails; the job still goes
+   red so the failure is visible.
 
 ## Results (holdout: final 20 percent of Dec 2025 - May 2026, 78,110 observations)
 
 | Model | MAE | RMSE | Within 10 min | High-wait MAE |
 |---|---|---|---|---|
 | prophet_fleet (champion) | 7.01 | 11.49 | 76.6% | 10.3 |
-| xgb_global | 8.29 | 12.93 | 71.7% | 12.2 |
-| xgb_local_fleet | 8.46 | 14.72 | 72.0% | 12.9 |
+| xgb_global | 8.26 | 12.88 | 71.8% | 12.2 |
+| xgb_local_fleet | 8.45 | 14.70 | 71.9% | 12.9 |
 | baseline (per-ride mean) | 9.51 | 14.47 | 64.5% | 14.4 |
+
+## Layout
+
+    pipeline.py            the entire Databricks job (single spark_python_task)
+    publish.py             gold _last -> Supabase, atomic rename swap via RPC
+    dashboard.py           gold _last -> static site/index.html (inline SVG, no JS)
+    databricks.yml         asset bundle: one job, one task, one environment
+    supabase_schema.sql    serving tables, staging twins, swap RPC, grants
+    tests/                 unit + integration tests, including every failure path
 
 ## Running it
 
@@ -65,6 +120,14 @@ Postgres transaction), and `dashboard.py` renders the static dashboard for Pages
     python publish.py                          # push serving tables to Supabase
     python dashboard.py --out site/index.html  # render the dashboard
 
-Secrets live in `.env` at the repo root (gitignored); see `.env.example` for the keys.
-`supabase_schema.sql` must be run once in the Supabase SQL editor before the first
-publish (newer Supabase projects grant no PostgREST access implicitly).
+Secrets live in `.env` at the repo root (gitignored); see `.env.example` for the
+keys, which are also the GitHub Actions secret names. `supabase_schema.sql` must be
+run once in the Supabase SQL editor before the first publish.
+
+## Querying the forecast API
+
+    curl "$SUPABASE_URL/rest/v1/predictions?row_kind=eq.forecast&park_name=eq.Disneyland&limit=5" \
+         -H "apikey: $SUPABASE_ANON_KEY"
+
+Every forecast row carries `predicted_wait_min` with `lower_bound`/`upper_bound`
+(80 percent interval), park-local and UTC timestamps, and the run provenance columns.

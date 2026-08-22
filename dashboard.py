@@ -377,8 +377,11 @@ def build_page(kpis: pd.DataFrame, preds: pd.DataFrame) -> str:
     # shared y-scale so the panels compare honestly.
     inner = np.arange(-40, 45, 5).astype(float)
     edges = np.concatenate(([-np.inf], inner, [np.inf]))
-    model_order = [m for m in ["prophet_fleet", "xgb_global", "xgb_local_fleet"]
-                   if m in set(bt["model_name"])]
+    model_order = [
+        m
+        for m in ["prophet_fleet", "xgb_global", "xgb_local_fleet", "baseline_ride_mean"]
+        if m in set(bt["model_name"])
+    ]
     hist_counts = {
         m: np.histogram(bt.loc[bt["model_name"] == m, "error_min"].to_numpy(), bins=edges)[0]
         for m in model_order
@@ -388,13 +391,18 @@ def build_page(kpis: pd.DataFrame, preds: pd.DataFrame) -> str:
     for m in model_order:
         mae = fmt(wide.loc[m, "mae"], 2) if m in wide.index else "n/a"
         rmse = fmt(wide.loc[m, "rmse"], 2) if m in wide.index else "n/a"
-        marker = " (champion)" if m == champ_name else ""
-        svg = histogram(list(edges), list(hist_counts[m]), width=320, height=220, y_top=shared_y)
+        if m == champ_name:
+            marker = " (champion)"
+        elif m == "baseline_ride_mean":
+            marker = " (the floor every model must beat)"
+        else:
+            marker = ""
+        svg = histogram(list(edges), list(hist_counts[m]), width=460, height=230, y_top=shared_y)
         hist_panels.append(
             f'<div class="panel"><h3>{esc(m)}{marker}</h3>'
             f'<p class="stat">MAE = {mae} min | RMSE = {rmse}</p>{svg}</div>'
         )
-    chart_hists = f'<div class="grid3">{"".join(hist_panels)}</div>'
+    chart_hists = f'<div class="grid2">{"".join(hist_panels)}</div>'
 
     # Chart D: highest-error rides (champion)
     per_ride = (
@@ -465,7 +473,9 @@ def build_page(kpis: pd.DataFrame, preds: pd.DataFrame) -> str:
 <div class="card">
   <h2>Backtest error distributions by model</h2>
   <p class="why">Predicted minus actual on the held-out test set, minutes. Blue under-forecasts,
-  red over-forecasts. Shared axes, so a wider spread means a genuinely worse model.</p>
+  red over-forecasts. Shared axes, so a wider spread means a genuinely worse model. The
+  baseline predicts each ride's historical average wait, so the difference between its
+  panel and the others is what the models actually learned.</p>
   {chart_hists}
 </div>
 

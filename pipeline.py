@@ -1297,10 +1297,14 @@ def run_pipeline(run_id: str) -> dict:
         trained_at_by_model[MODEL_BASELINE] = champion_model.trained_at
         kpi_df = build_kpi_table(kpis_by_model, new_champion, trained_at_by_model)
         forecast = build_forecast(champion_model, silver, start_local)
-        # Backtest rows for every candidate, not just the champion: the dashboard
-        # plots each model's test-set error distribution side by side.
+        # Backtest rows for every candidate plus the per-ride mean baseline: the
+        # dashboard plots each error distribution side by side, and the baseline
+        # panel must use the same train-mean baseline the KPI table was measured on.
         backtest = pd.concat(
-            [build_backtest(test_df, test_preds[name], name) for name in CANDIDATES],
+            [
+                build_backtest(test_df, test_preds[name], name)
+                for name in (*CANDIDATES, MODEL_BASELINE)
+            ],
             ignore_index=True,
         )
         model_trained_at = champion_model.trained_at

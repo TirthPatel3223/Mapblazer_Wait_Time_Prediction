@@ -4,22 +4,28 @@
 -- state -- every publish fully replaces them), so after re-running this file, run
 -- `python publish.py` once to refill them.
 --
--- publish.py loads both serving tables atomically: it fills the *_staging tables in
--- chunks, then calls publish_serving(), whose DELETE + INSERT of both serving tables
--- executes inside ONE Postgres transaction (every PostgREST function call is a single
--- transaction). If anything fails, the transaction rolls back and Supabase keeps the
--- previous consistent pair -- the dashboard can never see this week's KPIs beside last
--- week's forecast.
+-- How publishing stays atomic on free-tier compute:
+--   1. publish.py chunk-loads the *_staging tables (idempotent inserts, so a
+--      connection-level retry of a chunk cannot create duplicates).
+--   2. publish_serving() swaps serving and staging BY TABLE RENAME inside one
+--      function call -- one Postgres transaction, catalog-only updates, instant at
+--      any table size. Readers see the old pair or the new pair, never a mix.
+--      (Earlier versions moved every row through DELETE/INSERT and hit the
+--      free-tier statement timeout at 255K rows.)
+-- Because the names trade places, serving and staging objects carry identical
+-- structure, grants and policies.
 --
 -- Notes for this project:
---   * Projects created after 2026-05-30 do not auto-grant PostgREST access. Without
---     the explicit grants at the bottom every REST request 404s.
---   * The pg-safeupdate guard is active, so every DELETE carries WHERE true.
+--   * Projects created after 2026-05-30 do not auto-grant PostgREST access; without
+--     the explicit grants below every REST request 404s.
+--   * The pg-safeupdate guard is active; nothing here issues a bare DELETE.
 
 drop table if exists kpis_staging cascade;
 drop table if exists predictions_staging cascade;
 drop table if exists kpis cascade;
 drop table if exists predictions cascade;
+drop table if exists kpis_retiring cascade;
+drop table if exists predictions_retiring cascade;
 
 create table kpis (
     model            text not null,
@@ -51,16 +57,16 @@ create table predictions (
     run_status         text,
     generated_at       timestamptz,
     model_trained_at   text,
-    -- model_name is part of the key: backtest rows exist for every candidate model,
-    -- so (ride, timestamp) alone is not unique.
+    -- model_name is part of the key: backtest rows exist for every candidate model
+    -- and the baseline, so (ride, timestamp) alone is not unique.
     primary key (row_kind, model_name, park_name, ride_key, ts_local)
 );
 
 create index predictions_park_time_idx on predictions (park_name, ts_local);
 create index predictions_kind_model_idx on predictions (row_kind, model_name);
 
--- Staging twins: loaded in chunks over REST, then swapped into serving in one
--- transaction by publish_serving(). Never exposed to anon.
+-- Staging twins (LIKE copies structure and indexes; grants and policies are added
+-- explicitly below because LIKE does not copy them).
 create table kpis_staging (like kpis including all);
 create table predictions_staging (like predictions including all);
 
@@ -83,35 +89,40 @@ declare
     n_kpis bigint;
     n_predictions bigint;
 begin
-    -- One transaction: readers see the old pair or the new pair, never a mix.
-    -- TRUNCATE, not DELETE: DELETE walks every row through MVCC and hit the
-    -- statement timeout at 255K rows on free-tier compute; TRUNCATE is instant on
-    -- any table size, still rolls back with the transaction, and is not subject to
-    -- the pg-safeupdate guard.
-    truncate kpis;
-    insert into kpis select * from kpis_staging;
-    truncate predictions;
-    insert into predictions select * from predictions_staging;
-    select count(*) into n_kpis from kpis;
-    select count(*) into n_predictions from predictions;
+    select count(*) into n_kpis from kpis_staging;
+    select count(*) into n_predictions from predictions_staging;
     if n_kpis = 0 or n_predictions = 0 then
-        raise exception 'refusing to publish an empty serving table (kpis=%, predictions=%)',
+        raise exception 'refusing to publish: staging is empty (kpis=%, predictions=%)',
             n_kpis, n_predictions;
     end if;
+
+    -- The atomic swap: rename staging into serving. Catalog updates only.
+    alter table kpis rename to kpis_retiring;
+    alter table kpis_staging rename to kpis;
+    alter table kpis_retiring rename to kpis_staging;
+    alter table predictions rename to predictions_retiring;
+    alter table predictions_staging rename to predictions;
+    alter table predictions_retiring rename to predictions_staging;
+
+    -- Discard the retired serving rows so the store stays small.
+    truncate kpis_staging;
+    truncate predictions_staging;
+
+    -- PostgREST caches table metadata by name; tell it the names moved.
+    notify pgrst, 'reload schema';
+
     return jsonb_build_object('kpis', n_kpis, 'predictions', n_predictions);
 end $$;
 
--- The swap inserts ~255K rows in one statement; the platform's default statement
--- timeout for API roles is too short for that on free-tier compute. PostgREST
--- applies impersonated-role settings per request, and the reload notify makes it
--- pick this up without a restart.
+-- Longer statement timeout for API sessions as headroom on small compute.
 alter role service_role set statement_timeout = '5min';
 notify pgrst, 'reload config';
 
--- Read-only public access to the SERVING tables only.
+-- Read-only public access. Serving and staging get IDENTICAL grants and policies so
+-- the rename swap never changes what the anon role can see (staging only ever holds
+-- the same public data mid-load).
 grant usage on schema public to anon, authenticated;
-grant select on kpis, predictions to anon, authenticated;
-revoke all on kpis_staging, predictions_staging from anon, authenticated;
+grant select on kpis, predictions, kpis_staging, predictions_staging to anon, authenticated;
 revoke execute on function stage_reset(), publish_serving() from anon, authenticated;
 
 alter table kpis enable row level security;
@@ -121,6 +132,8 @@ alter table predictions_staging enable row level security;
 
 create policy "public read" on kpis for select to anon, authenticated using (true);
 create policy "public read" on predictions for select to anon, authenticated using (true);
+create policy "public read" on kpis_staging for select to anon, authenticated using (true);
+create policy "public read" on predictions_staging for select to anon, authenticated using (true);
 
 -- Verify:
 --   curl "$SUPABASE_URL/rest/v1/kpis?select=model,kpi_name,kpi_value&limit=5" \
