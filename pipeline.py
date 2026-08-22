@@ -1,19 +1,19 @@
 """Theme-park wait-time weekly pipeline. One file, one Databricks job task.
 
 End to end: bronze -> silver -> train three model families -> KPIs -> gold tables ->
-quality checks -> promote current tables to last -> update the champion pointer.
+quality checks -> promote current tables to last -> update the serving pointer.
 
 Serving discipline (the part that must never be broken):
 
   - Every silver and gold table exists twice: <name>_current and <name>_last.
   - The run writes only _current. Quality checks run against _current.
   - Any failure: drop _current, leave _last untouched, run the fallback, re-raise so the
-    job goes red. The fallback re-scores the upcoming week with the previous champion so
+    job goes red. The fallback re-scores the upcoming week with the previous model so
     the forecast window is fresh even when the run failed.
   - Only a fully successful run promotes _current into _last (atomic DEEP CLONE per
     table, all promotions back to back at the very end).
   - Model artifacts get the same guarantee: every run writes runs/<run_id>/ in the
-    models volume, and champion.json (the pointer that says which run serves) is written
+    models volume, and serving.json (the pointer that says which run serves) is written
     last, after the tables are promoted. A failed run's directory is orphaned, never
     read, and removed by retention.
   - Supabase and the dashboard read _last only. That happens outside Databricks (Free
@@ -80,7 +80,7 @@ MIN_OBS_PER_RIDE = 100  # 30-minute observations required in silver
 MIN_TRAIN_ROWS = 50  # rows required in the train split to fit a per-ride model
 TEST_FRACTION = 0.20
 FORECAST_DAYS = 7
-IMPROVEMENT_FACTOR = 0.99  # new champion must be at least 1 percent better
+IMPROVEMENT_FACTOR = 0.99  # a new model must be at least 1 percent better to take over
 HIGH_WAIT_MEAN_MIN = 10.0  # rides averaging above this are the high-wait segment
 PEAK_HOURS = (11, 20)  # local, end exclusive
 SEVERE_MISS_MIN = 15.0
@@ -707,7 +707,7 @@ class XGBLocalFleet:
 
 
 class BaselineMean:
-    """Per-ride historical mean. Never a champion; the floor every candidate must beat."""
+    """Per-ride historical mean. Never serves; the floor every candidate must beat."""
 
     family = MODEL_BASELINE
 
@@ -746,27 +746,27 @@ def runs_root() -> Path:
     return MODELS_ROOT / "runs"
 
 
-def champion_pointer_path() -> Path:
-    return MODELS_ROOT / "champion.json"
+def serving_pointer_path() -> Path:
+    return MODELS_ROOT / "serving.json"
 
 
-def read_champion_pointer() -> dict | None:
-    path = champion_pointer_path()
+def read_serving_pointer() -> dict | None:
+    path = serving_pointer_path()
     try:
         if not path.exists():
             return None
         pointer = json.loads(path.read_text(encoding="utf-8"))
         if not all(k in pointer for k in ("run_id", "model_name", "trained_at")):
-            log.error("champion.json is missing required fields: %s", sorted(pointer))
+            log.error("serving.json is missing required fields: %s", sorted(pointer))
             return None
         return pointer
     except Exception as exc:
-        log.error("champion.json unreadable: %s", exc)
+        log.error("serving.json unreadable: %s", exc)
         return None
 
 
-def write_champion_pointer(run_id: str, model_name: str, trained_at: str, ride_count: int) -> None:
-    """The last write of a successful run. One tiny file, so switching champions can
+def write_serving_pointer(run_id: str, model_name: str, trained_at: str, ride_count: int) -> None:
+    """The last write of a successful run. One tiny file, so switching serving_models can
     never be left half-done the way copying a 58 MB Prophet fleet could."""
     pointer = {
         "run_id": run_id,
@@ -775,7 +775,7 @@ def write_champion_pointer(run_id: str, model_name: str, trained_at: str, ride_c
         "ride_count": ride_count,
     }
     MODELS_ROOT.mkdir(parents=True, exist_ok=True)
-    path = champion_pointer_path()
+    path = serving_pointer_path()
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(pointer, indent=2), encoding="utf-8")
     try:
@@ -785,11 +785,11 @@ def write_champion_pointer(run_id: str, model_name: str, trained_at: str, ride_c
         # rewrite is an acceptable fallback.
         path.write_text(json.dumps(pointer, indent=2), encoding="utf-8")
         tmp.unlink(missing_ok=True)
-    log.info("champion.json -> run %s (%s)", run_id, model_name)
+    log.info("serving.json -> run %s (%s)", run_id, model_name)
 
 
-def persist_champion(run_id: str, model) -> Path:
-    """Write the champion family's artifacts into runs/<run_id>/. A failed run's
+def persist_serving_model(run_id: str, model) -> Path:
+    """Write the serving family's artifacts into runs/<run_id>/. A failed run's
     directory is orphaned, never read, and cleaned up by retention -- so this can
     happen before the quality checks without risking the serving model."""
     run_dir = runs_root() / run_id
@@ -830,19 +830,19 @@ def load_manifest(run_dir: Path) -> dict | None:
     return manifest
 
 
-def load_champion_model(pointer: dict):
-    """Resolve champion.json -> runs/<run_id>/, validate the manifest, load the model,
+def load_serving_model(pointer: dict):
+    """Resolve serving.json -> runs/<run_id>/, validate the manifest, load the model,
     and confirm the loaded entity set matches the manifest before trusting it."""
     run_dir = runs_root() / pointer["run_id"]
     if not run_dir.is_dir():
-        log.error("champion run directory missing: %s", run_dir)
+        log.error("serving run directory missing: %s", run_dir)
         return None, None
     manifest = load_manifest(run_dir)
     if manifest is None:
         return None, None
     if manifest["run_id"] != pointer["run_id"] or manifest["model_name"] != pointer["model_name"]:
         log.error(
-            "manifest disagrees with champion.json: manifest says %s/%s, pointer says %s/%s",
+            "manifest disagrees with serving.json: manifest says %s/%s, pointer says %s/%s",
             manifest["run_id"],
             manifest["model_name"],
             pointer["run_id"],
@@ -856,7 +856,7 @@ def load_champion_model(pointer: dict):
     try:
         model = family.load(run_dir, manifest)
     except Exception as exc:
-        log.error("failed to load champion artifacts from %s: %s", run_dir, exc)
+        log.error("failed to load serving artifacts from %s: %s", run_dir, exc)
         return None, None
     if model.entities != set(manifest["entities"]):
         log.error(
@@ -869,14 +869,14 @@ def load_champion_model(pointer: dict):
 
 
 def cleanup_runs() -> None:
-    """Keep the RETAIN_RUNS most recent run directories plus whatever champion.json
+    """Keep the RETAIN_RUNS most recent run directories plus whatever serving.json
     points at. Prophet is roughly 58 MB per run and free-tier storage is finite."""
     root = runs_root()
     if not root.is_dir():
         return
     dirs = sorted((p for p in root.iterdir() if p.is_dir()), key=lambda p: p.name, reverse=True)
     keep = {p.name for p in dirs[:RETAIN_RUNS]}
-    pointer = read_champion_pointer()
+    pointer = read_serving_pointer()
     if pointer:
         keep.add(pointer["run_id"])
     for p in dirs:
@@ -920,7 +920,7 @@ def compute_kpis(
 
 def build_kpi_table(
     kpis_by_model: dict[str, dict[str, float]],
-    champion: str,
+    serving: str,
     trained_at_by_model: dict[str, str],
 ) -> pd.DataFrame:
     rows = []
@@ -931,7 +931,7 @@ def build_kpi_table(
                     "model": model_name,
                     "kpi_name": kpi_name,
                     "kpi_value": float(value),
-                    "is_champion": model_name == champion,
+                    "is_serving": model_name == serving,
                     "trained_at": trained_at_by_model.get(model_name, ""),
                 }
             )
@@ -1052,7 +1052,7 @@ def build_backtest(test_df: pd.DataFrame, preds: pd.DataFrame, model_name: str) 
 
 def stamp(df: pd.DataFrame, run_id: str, run_status: str, model_trained_at: str) -> pd.DataFrame:
     """Provenance columns both gold tables carry. run_id is the run that TRAINED the
-    serving model (it must agree with champion.json); generated_at is this run."""
+    serving model (it must agree with serving.json); generated_at is this run."""
     out = df.copy()
     out["run_id"] = run_id
     out["run_status"] = run_status
@@ -1113,14 +1113,14 @@ def check_kpis(kpis: pd.DataFrame) -> list[str]:
     for model_name, value in mae.items():
         if not (math.isfinite(value) and value > 0):
             problems.append(f"MAE for {model_name} is {value}; must be finite and positive")
-    champions = kpis[kpis["is_champion"]]["model"].unique()
-    if len(champions) != 1:
-        problems.append(f"expected exactly one champion, found {list(champions)}")
-    elif MODEL_BASELINE in mae.index and champions[0] in mae.index:
-        champ_mae, base_mae = float(mae[champions[0]]), float(mae[MODEL_BASELINE])
-        if not champ_mae < base_mae:
+    serving_models = kpis[kpis["is_serving"]]["model"].unique()
+    if len(serving_models) != 1:
+        problems.append(f"expected exactly one serving model, found {list(serving_models)}")
+    elif MODEL_BASELINE in mae.index and serving_models[0] in mae.index:
+        serving_mae, base_mae = float(mae[serving_models[0]]), float(mae[MODEL_BASELINE])
+        if not serving_mae < base_mae:
             problems.append(
-                f"champion {champions[0]} MAE {champ_mae:.2f} does not beat "
+                f"serving model {serving_models[0]} MAE {serving_mae:.2f} does not beat "
                 f"the per-ride mean baseline {base_mae:.2f}"
             )
     return problems
@@ -1179,26 +1179,26 @@ def check_predictions(preds: pd.DataFrame, n_active_entities: int) -> list[str]:
 # ------------------------------------------------------------------------------------
 
 
-def previous_champion_from_kpis() -> dict | None:
-    """Champion model name and MAE as recorded in gold.kpis_last, or None on first run."""
+def previous_serving_from_kpis() -> dict | None:
+    """Serving model name and MAE as recorded in gold.kpis_last, or None on first run."""
     if not table_exists(KPI_TABLE + LAST):
         return None
     kpis = read_table(KPI_TABLE + LAST)
-    champ_rows = kpis[(kpis["is_champion"]) & (kpis["kpi_name"] == "mae")]
-    if champ_rows.empty:
-        log.warning("gold.kpis_last exists but records no champion MAE")
+    serving_rows = kpis[(kpis["is_serving"]) & (kpis["kpi_name"] == "mae")]
+    if serving_rows.empty:
+        log.warning("gold.kpis_last exists but records no serving MAE")
         return None
-    row = champ_rows.iloc[0]
+    row = serving_rows.iloc[0]
     return {
         "model_name": str(row["model"]),
         "mae": float(row["kpi_value"]),
-        "run_id": str(row["run_id"]) if "run_id" in champ_rows.columns else None,
+        "run_id": str(row["run_id"]) if "run_id" in serving_rows.columns else None,
     }
 
 
 def decide_promotion(new_mae: float, previous: dict | None) -> tuple[bool, str]:
     if previous is None:
-        return True, "first run: no incumbent champion, shipping the new model"
+        return True, "first run: no incumbent, shipping the new model"
     threshold = previous["mae"] * IMPROVEMENT_FACTOR
     if new_mae < threshold:
         return True, (
@@ -1274,29 +1274,29 @@ def run_pipeline(run_id: str) -> dict:
             kpis_by_model[name]["coverage_pct"],
         )
 
-    new_champion = min(CANDIDATES, key=lambda m: kpis_by_model[m]["mae"])
-    new_mae = kpis_by_model[new_champion]["mae"]
+    best_candidate = min(CANDIDATES, key=lambda m: kpis_by_model[m]["mae"])
+    new_mae = kpis_by_model[best_candidate]["mae"]
     if not (math.isfinite(new_mae) and new_mae > 0):
         raise PipelineError(f"best new MAE is {new_mae}; evaluation is broken, refusing to decide")
-    log.info("best new model: %s (mae %.3f)", new_champion, new_mae)
+    log.info("best new model: %s (mae %.3f)", best_candidate, new_mae)
 
     # ---- Step 5: promotion decision ----------------------------------------------
-    previous = previous_champion_from_kpis()
+    previous = previous_serving_from_kpis()
     ship_new, reason = decide_promotion(new_mae, previous)
     log.info("promotion decision: %s", reason)
 
     start_local = now_local()
     if ship_new:
-        champion_model = models[new_champion]
+        serving_model = models[best_candidate]
         run_status = STATUS_FRESH
-        champ_run_id = run_id
+        serving_run_id = run_id
         # Artifacts go to runs/<run_id>/ now; if anything later fails, the directory
-        # is orphaned and champion.json still points at the old run.
-        persist_champion(run_id, champion_model)
+        # is orphaned and serving.json still points at the old run.
+        persist_serving_model(run_id, serving_model)
         trained_at_by_model = {name: m.trained_at for name, m in models.items()}
-        trained_at_by_model[MODEL_BASELINE] = champion_model.trained_at
-        kpi_df = build_kpi_table(kpis_by_model, new_champion, trained_at_by_model)
-        forecast = build_forecast(champion_model, silver, start_local)
+        trained_at_by_model[MODEL_BASELINE] = serving_model.trained_at
+        kpi_df = build_kpi_table(kpis_by_model, best_candidate, trained_at_by_model)
+        forecast = build_forecast(serving_model, silver, start_local)
         # Backtest rows for every candidate plus the per-ride mean baseline: the
         # dashboard plots each error distribution side by side, and the baseline
         # panel must use the same train-mean baseline the KPI table was measured on.
@@ -1307,34 +1307,34 @@ def run_pipeline(run_id: str) -> dict:
             ],
             ignore_index=True,
         )
-        model_trained_at = champion_model.trained_at
+        model_trained_at = serving_model.trained_at
     else:
-        pointer = read_champion_pointer()
+        pointer = read_serving_pointer()
         if pointer is None:
             raise PipelineError(
-                "promotion gate chose the previous model but champion.json is missing or "
+                "promotion gate chose the previous model but serving.json is missing or "
                 "unreadable; refusing to guess (unconditional promotion is the failure "
                 "mode this pipeline exists to prevent)"
             )
         if previous and previous.get("run_id") and previous["run_id"] != pointer["run_id"]:
             raise PipelineError(
-                f"kpis_last.run_id {previous['run_id']} disagrees with champion.json "
+                f"kpis_last.run_id {previous['run_id']} disagrees with serving.json "
                 f"run_id {pointer['run_id']}; refusing to serve mismatched model and KPIs"
             )
-        champion_model, manifest = load_champion_model(pointer)
-        if champion_model is None:
+        serving_model, manifest = load_serving_model(pointer)
+        if serving_model is None:
             raise PipelineError(
-                f"could not reload previous champion from run {pointer['run_id']}; "
+                f"could not reload the previous serving model from run {pointer['run_id']}; "
                 "job fails rather than promoting unvalidated output"
             )
         run_status = STATUS_KEPT
-        champ_run_id = pointer["run_id"]
+        serving_run_id = pointer["run_id"]
         model_trained_at = pointer["trained_at"]
         # Previous KPI values keep serving: the model has not changed, so its measured
         # KPIs are still the correct ones to display.
         prev_kpis = read_table(KPI_TABLE + LAST)
-        kpi_df = prev_kpis[["model", "kpi_name", "kpi_value", "is_champion", "trained_at"]].copy()
-        forecast = build_forecast(champion_model, silver, start_local)
+        kpi_df = prev_kpis[["model", "kpi_name", "kpi_value", "is_serving", "trained_at"]].copy()
+        forecast = build_forecast(serving_model, silver, start_local)
         prev_preds = read_table(PRED_TABLE + LAST)
         backtest = prev_preds[prev_preds["row_kind"] == "backtest"][
             [
@@ -1345,8 +1345,8 @@ def run_pipeline(run_id: str) -> dict:
         ].copy()
 
     # ---- Step 4: gold tables -----------------------------------------------------
-    kpi_df = stamp(kpi_df, champ_run_id, run_status, model_trained_at)
-    preds_df = stamp(pd.concat([forecast, backtest], ignore_index=True), champ_run_id, run_status, model_trained_at)
+    kpi_df = stamp(kpi_df, serving_run_id, run_status, model_trained_at)
+    preds_df = stamp(pd.concat([forecast, backtest], ignore_index=True), serving_run_id, run_status, model_trained_at)
     write_table(KPI_TABLE + CURRENT, kpi_df)
     write_table(PRED_TABLE + CURRENT, preds_df)
 
@@ -1363,20 +1363,20 @@ def run_pipeline(run_id: str) -> dict:
         promote_table(table + CURRENT, table + LAST)
 
     if ship_new:
-        write_champion_pointer(
-            run_id, champion_model.family, champion_model.trained_at, len(champion_model.entities)
+        write_serving_pointer(
+            run_id, serving_model.family, serving_model.trained_at, len(serving_model.entities)
         )
     else:
         log.info(
-            "champion.json unchanged: still run %s (%s)", champ_run_id, champion_model.family
+            "serving.json unchanged: still run %s (%s)", serving_run_id, serving_model.family
         )
     cleanup_runs()
 
     return {
         "run_id": run_id,
         "run_status": run_status,
-        "champion": champion_model.family,
-        "champion_run_id": champ_run_id,
+        "serving_model": serving_model.family,
+        "serving_run_id": serving_run_id,
         "new_model_mae": round(new_mae, 3),
         "previous_mae": round(previous["mae"], 3) if previous else None,
         "decision": reason,
@@ -1394,16 +1394,16 @@ def run_pipeline(run_id: str) -> dict:
 
 
 def run_fallback() -> bool:
-    """Re-score the upcoming week with the previous champion and swap ONLY the forecast
+    """Re-score the upcoming week with the previous serving model and swap ONLY the forecast
     rows of gold.predictions_last. Returns True if the forecast was refreshed. Never
     raises: a broken fallback must not mask the original failure."""
     try:
         if not table_exists(SILVER_TABLE + LAST):
             log.warning("fallback: no silver _last table exists; nothing to fall back to")
             return False
-        pointer = read_champion_pointer()
+        pointer = read_serving_pointer()
         if pointer is None:
-            log.warning("fallback: no champion.json; nothing to fall back to")
+            log.warning("fallback: no serving.json; nothing to fall back to")
             return False
 
         if table_exists(KPI_TABLE + LAST):
@@ -1412,18 +1412,18 @@ def run_fallback() -> bool:
                 kpi_run_id = str(kpis_last["run_id"].iloc[0])
                 if kpi_run_id != pointer["run_id"]:
                     log.error(
-                        "fallback: kpis_last.run_id %s disagrees with champion.json run_id %s "
+                        "fallback: kpis_last.run_id %s disagrees with serving.json run_id %s "
                         "-- a previous run promoted tables but never moved the pointer. "
-                        "Changing NOTHING; resolve by editing champion.json or re-running "
+                        "Changing NOTHING; resolve by editing serving.json or re-running "
                         "a full successful pipeline.",
                         kpi_run_id,
                         pointer["run_id"],
                     )
                     return False
 
-        model, manifest = load_champion_model(pointer)
+        model, manifest = load_serving_model(pointer)
         if model is None:
-            log.warning("fallback: champion artifacts incomplete; changing nothing")
+            log.warning("fallback: serving artifacts incomplete; changing nothing")
             return False
 
         silver_last = read_table(SILVER_TABLE + LAST)
@@ -1456,7 +1456,7 @@ def run_fallback() -> bool:
         # A Delta overwrite is one atomic commit; readers see old or new, never partial.
         write_table(PRED_TABLE + LAST, combined)
         log.info(
-            "fallback: refreshed forecast window with previous champion %s from run %s "
+            "fallback: refreshed forecast window with the previous serving model %s from run %s "
             "(%d forecast rows). gold.kpis_last untouched.",
             pointer["model_name"],
             pointer["run_id"],

@@ -64,8 +64,8 @@ Databricks serverless task every Sunday at 06:00 UTC:
       v
     themepark.gold.kpis_current              MAE, RMSE, within-10-min, severe-miss,
                                              bias, high-wait MAE, peak-hours MAE
-                                             per model, champion flagged
-    themepark.gold.predictions_current       7-day forecast (champion) +
+                                             per model, serving model flagged
+    themepark.gold.predictions_current       7-day forecast (serving model) +
                                              test-set backtest rows for every model
                                              and the baseline (predicted, actual,
                                              error), row_kind distinguishes them
@@ -82,25 +82,26 @@ Quality checks include: silver row count vs last week, attraction count, zero-wa
 share, null checks, and a timezone tripwire (the local hour with the highest mean wait
 must fall between 11:00 and 20:00 -- inverted timezone handling relocates the
 afternoon peak into the late evening); gold checks cover model presence, finite MAEs,
-champion-beats-baseline, forecast ride coverage, bound ordering, and row-count bands.
+serving-model-beats-baseline, forecast ride coverage, bound ordering, and row-count
+bands.
 
-### Champion promotion and rollback
+### Promotion and rollback
 
 Model artifacts are plain files in the `themepark.gold.models` volume -- Prophet
 serialized to JSON per ride, XGBoost via `save_model` -- written to an immutable
-`runs/<run_id>/` directory with a manifest. A tiny `champion.json` pointer names the
+`runs/<run_id>/` directory with a manifest. A tiny `serving.json` pointer names the
 serving run and is written last, only after the tables have been promoted.
 
-A newly trained model ships only if its holdout MAE beats the incumbent champion's
-recorded MAE by at least 1 percent. Otherwise the incumbent is reloaded from disk and
+A newly trained model ships only if its holdout MAE beats the incumbent's recorded MAE
+by at least 1 percent. Otherwise the incumbent is reloaded from disk and
 re-scored over the upcoming week, so the forecast window is fresh either way. Rolling
-back is editing `champion.json` to an earlier `run_id`.
+back is editing `serving.json` to an earlier `run_id`.
 
 ### Failure behavior
 
 Any failure -- a quality check, a training error, unreadable bronze -- drops the
 `_current` tables, leaves `_last` untouched, re-scores the upcoming week with the
-previous champion (validated against the same prediction checks) so the dashboard
+previous serving model (validated against the same prediction checks) so the dashboard
 never serves a forecast window that has slid into the past, and still fails the job
 so the failure alerts. Both gold tables carry `run_id`, `run_status` (`fresh_model`,
 `kept_previous_model`, or `fallback_after_failure`) and `generated_at`, so a fallback
@@ -128,7 +129,7 @@ pushed. On Sundays at 08:00 UTC (or on demand) a GitHub Actions workflow:
 
 | Model | MAE | RMSE | Within 10 min | High-wait MAE |
 |---|---|---|---|---|
-| prophet_fleet (champion) | 7.01 | 11.49 | 76.6% | 10.3 |
+| prophet_fleet (serving) | 7.01 | 11.49 | 76.6% | 10.3 |
 | xgb_global | 8.26 | 12.88 | 71.8% | 12.2 |
 | xgb_local_fleet | 8.45 | 14.70 | 71.9% | 12.9 |
 | baseline (per-ride mean) | 9.51 | 14.47 | 64.5% | 14.4 |

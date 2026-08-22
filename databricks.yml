@@ -49,8 +49,8 @@ resources:
         - task_key: weekly_pipeline
           description: >-
             Bronze -> silver -> train -> KPIs -> gold -> quality checks -> promote
-            current to last -> champion pointer. On any failure the task drops the
-            _current tables, re-scores the week with the previous champion, and fails.
+            current to last -> serving pointer. On any failure the task drops the
+            _current tables, re-scores the week with the previous model, and fails.
           spark_python_task:
             python_file: ./pipeline.py
           environment_key: ml

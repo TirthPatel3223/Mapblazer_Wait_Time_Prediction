@@ -31,7 +31,7 @@ create table kpis (
     model            text not null,
     kpi_name         text not null,
     kpi_value        double precision,
-    is_champion      boolean not null default false,
+    is_serving      boolean not null default false,
     trained_at       text,
     run_id           text,
     run_status       text,

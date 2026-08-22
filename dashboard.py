@@ -110,7 +110,7 @@ th, td { text-align: right; padding: 6px 10px; border-bottom: 1px solid var(--gr
 th { color: var(--muted); font-weight: 500; font-size: 12px; }
 th:first-child, td:first-child { text-align: left; }
 td:first-child { color: var(--ink); }
-tr.champ td { font-weight: 650; }
+tr.serving td { font-weight: 650; }
 details { margin-top: 10px; }
 summary { color: var(--muted); font-size: 12px; cursor: pointer; }
 details table { font-size: 12px; margin-top: 8px; }
@@ -283,9 +283,9 @@ def data_table(headers, rows) -> str:
 
 
 def build_page(kpis: pd.DataFrame, preds: pd.DataFrame) -> str:
-    champ = kpis[kpis["is_champion"]]
-    champ_name = champ["model"].iloc[0]
-    champ_wide = champ.set_index("kpi_name")["kpi_value"]
+    serving = kpis[kpis["is_serving"]]
+    serving_name = serving["model"].iloc[0]
+    serving_wide = serving.set_index("kpi_name")["kpi_value"]
     run_id = str(kpis["run_id"].iloc[0])
     # The badge describes what is being SERVED, and the forecast rows are where a
     # fallback is recorded (a fallback refreshes predictions_last but leaves kpis_last
@@ -300,15 +300,15 @@ def build_page(kpis: pd.DataFrame, preds: pd.DataFrame) -> str:
     window = f"{fc['ts_local'].min():%b %d} to {fc['ts_local'].max():%b %d, %Y}"
 
     # The backtest carries every candidate's test-set predictions; the time-series
-    # charts show the champion, the histogram grid compares all of them.
-    bt_champ = bt[bt["model_name"] == champ_name]
-    if bt_champ.empty:
-        bt_champ = bt
+    # charts show the serving model, the histogram grid compares all of them.
+    bt_serving = bt[bt["model_name"] == serving_name]
+    if bt_serving.empty:
+        bt_serving = bt
 
     # Tiles
     tiles = []
     for key, label, unit, why in TILE_SPECS:
-        value = champ_wide.get(key)
+        value = serving_wide.get(key)
         digits = 1
         tiles.append(
             f'<div class="tile" title="{esc(why)}"><div class="v">{fmt(value, digits)}'
@@ -328,8 +328,8 @@ def build_page(kpis: pd.DataFrame, preds: pd.DataFrame) -> str:
         if model not in wide.index:
             continue
         cells = "".join(f"<td>{fmt(wide.loc[model, k])}</td>" for k, _ in cols)
-        cls = ' class="champ"' if model == champ_name else ""
-        marker = " (champion)" if model == champ_name else ""
+        cls = ' class="serving"' if model == serving_name else ""
+        marker = " (serving)" if model == serving_name else ""
         model_rows.append(f"<tr{cls}><td>{esc(model)}{marker}</td>{cells}</tr>")
     model_table = (
         '<table><tr><th>Model</th>'
@@ -339,10 +339,10 @@ def build_page(kpis: pd.DataFrame, preds: pd.DataFrame) -> str:
         + "</table>"
     )
 
-    # Chart A: daily mean, predicted vs actual (champion)
-    bt_champ = bt_champ.copy()
-    bt_champ["date"] = bt_champ["ts_local"].dt.normalize()
-    daily = bt_champ.groupby("date")[["actual_wait_min", "predicted_wait_min"]].mean()
+    # Chart A: daily mean, predicted vs actual (serving model)
+    bt_serving = bt_serving.copy()
+    bt_serving["date"] = bt_serving["ts_local"].dt.normalize()
+    daily = bt_serving.groupby("date")[["actual_wait_min", "predicted_wait_min"]].mean()
     daily_labels = [d.strftime("%b %d") for d in daily.index]
     chart_daily = line_chart(
         daily_labels,
@@ -359,8 +359,8 @@ def build_page(kpis: pd.DataFrame, preds: pd.DataFrame) -> str:
          zip(daily_labels, daily["actual_wait_min"], daily["predicted_wait_min"], strict=True)],
     )
 
-    # Chart B: mean wait by local hour (champion)
-    hourly = bt_champ.groupby(bt_champ["ts_local"].dt.hour)[
+    # Chart B: mean wait by local hour (serving model)
+    hourly = bt_serving.groupby(bt_serving["ts_local"].dt.hour)[
         ["actual_wait_min", "predicted_wait_min"]
     ].mean()
     hour_labels = [f"{h:02d}:00" for h in hourly.index]
@@ -393,8 +393,8 @@ def build_page(kpis: pd.DataFrame, preds: pd.DataFrame) -> str:
     for m in model_order:
         mae = fmt(wide.loc[m, "mae"], 2) if m in wide.index else "n/a"
         rmse = fmt(wide.loc[m, "rmse"], 2) if m in wide.index else "n/a"
-        if m == champ_name:
-            marker = " (champion)"
+        if m == serving_name:
+            marker = " (serving)"
         elif m == "baseline_ride_mean":
             marker = " (the floor every model must beat)"
         else:
@@ -406,9 +406,9 @@ def build_page(kpis: pd.DataFrame, preds: pd.DataFrame) -> str:
         )
     chart_hists = f'<div class="grid2">{"".join(hist_panels)}</div>'
 
-    # Chart D: highest-error rides (champion)
+    # Chart D: highest-error rides (serving model)
     per_ride = (
-        bt_champ.groupby(["park_name", "ride_key"])
+        bt_serving.groupby(["park_name", "ride_key"])
         .agg(
             mae=("error_min", lambda e: float(np.abs(e).mean())),
             n=("error_min", "size"),
@@ -431,7 +431,7 @@ def build_page(kpis: pd.DataFrame, preds: pd.DataFrame) -> str:
     )
 
     built = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    test_n = f"{len(bt_champ):,}"
+    test_n = f"{len(bt_serving):,}"
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -450,7 +450,7 @@ def build_page(kpis: pd.DataFrame, preds: pd.DataFrame) -> str:
 <div class="prov">
   <span class="badge {status_class}"><span class="dot"></span>{esc(status_label)}</span>
   <span><span class="k">Serving forecast</span><b>{esc(window)}</b></span>
-  <span><span class="k">Model</span><b>{esc(champ_name)}</b></span>
+  <span><span class="k">Model</span><b>{esc(serving_name)}</b></span>
   <span><span class="k">Run</span>{esc(run_id)}</span>
   <span><span class="k">Trained</span>{esc(trained_at)} UTC</span>
   <span><span class="k">Published</span>{generated_at:%Y-%m-%d %H:%M} UTC</span>
@@ -460,13 +460,13 @@ def build_page(kpis: pd.DataFrame, preds: pd.DataFrame) -> str:
 
 <div class="card">
   <h2>Model comparison</h2>
-  <p class="why">Backtest on the held-out final 20 percent of history ({test_n} observations). The champion must beat the per-ride mean baseline.</p>
+  <p class="why">Backtest on the held-out final 20 percent of history ({test_n} observations). The serving model must beat the per-ride mean baseline.</p>
   {model_table}
 </div>
 
 <div class="card">
   <h2>Predicted vs actual, daily mean</h2>
-  <p class="why">Champion backtest: mean wait across all rides per day. Hover for values.</p>
+  <p class="why">Serving model backtest: mean wait across all rides per day. Hover for values.</p>
   {legend_two}
   {chart_daily}
   {daily_table}
@@ -490,7 +490,7 @@ def build_page(kpis: pd.DataFrame, preds: pd.DataFrame) -> str:
   </div>
   <div class="card">
     <h2>Hardest rides to predict</h2>
-    <p class="why">Highest champion backtest MAE. Long queues move in bursts.</p>
+    <p class="why">Highest backtest MAE for the serving model. Long queues move in bursts.</p>
     {chart_rides}
   </div>
 </div>
