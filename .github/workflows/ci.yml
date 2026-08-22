@@ -1,0 +1,42 @@
+name: ci
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - run: pip install --quiet pandas numpy pyarrow holidays "xgboost<4" scikit-learn pytest ruff
+
+      - name: Lint
+        run: ruff check src jobs scripts tests
+
+      - name: Tests
+        # The suite is mostly regression tests for the two defects this rewrite fixed:
+        # the UTC/park-local timezone error and the entity-resolution mismatch. If either
+        # ever comes back, CI fails before it can reach a scheduled run.
+        run: pytest -q
+
+  deploy:
+    # Job definitions are deployed as code, so the Databricks workspace can be rebuilt
+    # from this repo instead of reconstructed by clicking through the UI.
+    needs: test
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: databricks/setup-cli@main
+      - name: Deploy the asset bundle
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: databricks bundle deploy --target prod

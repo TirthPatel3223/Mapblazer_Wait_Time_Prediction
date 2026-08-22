@@ -1,76 +1,269 @@
-# Theme Park Wait Time Predictor
+# Theme Park Wait-Time Forecasting — Production Pipeline
 
-A comprehensive Machine Learning pipeline designed to predict theme park ride wait times using a mix of historical datasets and real-time telemetry from the Queue-Times API. 
+An automated forecasting system that ingests live queue data every 30 minutes, retrains
+and re-evaluates four model families every Sunday, promotes a champion through an MLflow
+registry gate, publishes a 7-day forecast for every attraction to a REST-accessible
+Postgres, and measures last week's predictions against what actually happened.
 
-This repository leverages three different architectures—Time Series Analysis, Localized Gradient Boosting, and a Unified Global Gradient Boosting approach—to analyze temporal patterns, holidays, and park-specific constraints.
+Nobody touches it. It runs at **$0/month**.
 
-## Features
-*   **Three Distinct ML Architectures:**
-    *   **Prophet (Time Series):** Utilizes Facebook Prophet for robust chronological time-series forecasting.
-    *   **XGBoost Local:** Trains a highly specialized, independent Gradient Boosted Tree for every individual ride.
-    *   **XGBoost Global:** Trains a massive, unified Gradient Boosted Tree across all parks and rides, utilizing strict categorical embeddings to map relationships across the dataset.
-*   **Advanced Feature Engineering:** Automatically encodes continuous temporal data into cyclical sine/cosine features (e.g., smoothly mapping the transition from 23:59 to 00:00).
-*   **Robust Operational Filtering:** Intelligently filters out erroneous "zero" wait times during park closures while preserving true "walk-on" zeros during operating hours.
-*   **Real-time API Inference:** Includes a live testing harness that pings the Queue-Times API, fetches the current wait times, runs inference against all 3 model architectures simultaneously, and compares them against the historical baseline average.
-
-## Project Structure
-```text
-├── trained_models/
-│   ├── prophet/            # Serialized Prophet JSON models
-│   ├── xgboost/            # Serialized XGBoost Local JSON models
-│   └── xgboost_global/     # Global model JSON + Categorical Ontologies
-├── data_utils.py                    # Centralized ETL and filtering logic
-├── train_prophet_models.py          # Training pipeline for Prophet
-├── train_xgboost_models.py          # Training pipeline for XGBoost (Local)
-├── train_xgboost_global.py          # Training pipeline for XGBoost (Global)
-├── real_time_testing/
-│   ├── test_realtime_predictions.py         # Live API inference & evaluation script
-│   └── plot_error_histograms.py             # Visualizes Mean Absolute Error distributions
-└── model_testing_scripts/
-    ├── evaluate_test_data.py                # Generates holdout test data histograms
-    └── evaluate_high_traffic_test_data.py   # Generates weekend/holiday data histograms
-```
-
-## Setup & Installation
-
-**Prerequisites:** Python 3.9+
-
-Install the required dependencies:
-```bash
-pip install pandas numpy xgboost prophet requests matplotlib seaborn holidays
-```
-
-## Training the Models
-The training dataset must be located at `data/wait_times_join_attractions_themeparks_table_data-1778551975724.csv`.
-
-To completely rebuild the model artifacts from the raw data, execute the training scripts (they automatically utilize multiprocessing to speed up training):
-```bash
-python train_xgboost_global.py
-python train_xgboost_models.py
-python train_prophet_models.py
-```
-*Note: The global model is significantly faster to train than the localized loops.*
-
-## Live Real-time Inference
-Once the models are populated inside `trained_models/`, you can query the live API to test how well the models are performing at this exact second:
-```bash
-python real_time_testing/test_realtime_predictions.py
-```
-This script will output a tabular sample to your console and serialize the full results into `data/realtime_comparison_v2.csv`.
-
-## Error Analysis
-
-To rigorously evaluate the models on the historical 20% holdout testing dataset:
-```bash
-python model_testing_scripts/evaluate_test_data.py
-python model_testing_scripts/evaluate_high_traffic_test_data.py
-```
-
-To visualize the spread and the Mean Absolute Error (MAE) of your live real-time predictions across the different architectures:
-```bash
-python real_time_testing/plot_error_histograms.py
-```
-This will output an `error_histograms.png` graphic containing a 2x2 grid of KDE distributions plotting `Predicted Wait - Actual Wait`.
+📊 **[Live dashboard](https://TirthPatel3223.github.io/Mapblazer_Wait_Time_Prediction/)** ·
+🔌 [REST API](#rest-api) · 🐛 [Known issues](KNOWN_ISSUES.md)
 
 ---
-*Disclaimer: The testing of the model in real time for visulation relies on the Queue-Times API. The data used to train the models was provided by Mapblazer Team.*
+
+## Current production numbers
+
+Measured on **109 attractions across 5 parks**, forecasting a full week ahead at
+30-minute resolution.
+
+| | Backtest (14-day holdout) | **Production (live)** |
+|---|---|---|
+| MAE | 6.81 min | **6.84 min** |
+| RMSE | 11.31 min | **10.99 min** |
+| Within 10 minutes | 77.1% | **77.2%** |
+| 80% interval coverage | — | **85.1%** |
+| Coverage (rides servable) | 1.000 | 1.000 |
+
+"Production" means the forecast was published **before any of those observations
+existed**, then scored against them a week later. It is the only number here with no
+possibility of leakage, and the backtest tracks it at 1.00× — the offline estimate is
+honest.
+
+**Candidate leaderboard** (same holdout, retrained weekly):
+
+| Model | MAE | RMSE | p95 abs err | Within 10 min | High-wait MAE |
+|---|---|---|---|---|---|
+| **prophet_fleet** *(champion)* | **6.81** | 11.31 | 24.3 | 77.1% | 9.98 |
+| xgb_global | 7.06 | 12.00 | 26.7 | 76.3% | 10.38 |
+| xgb_local_fleet | 7.18 | 12.68 | 28.7 | 75.8% | 10.68 |
+| baseline (per-ride mean) | 9.65 | 14.70 | 30.5 | 63.9% | 14.56 |
+
+> **On the previous version's numbers.** An earlier iteration of this project reported a
+> Prophet MAE of **3.27 min**. That figure was wrong — it was computed on a 77-ride
+> low-wait subsample with the busiest hours of every day filtered out, because of two
+> defects described below. **6.84 min on the whole problem is the real number**, and it
+> is worth more than the flattering one.
+
+---
+
+## The two defects this rewrite fixed
+
+Both were found by auditing the evaluation path rather than the models. Both are now
+pinned by regression tests in [`tests/`](tests); the original code is in
+[`legacy/v1/`](legacy/v1).
+
+### 1 · Park-local operating hours applied to UTC timestamps
+
+The source database stores UTC. The filter declared hours that are plainly local
+(`Disneyland: open 8, close 24`) and applied them straight to UTC hours. The parks are
+UTC−8/−7, so "keep hours 8 through 23" actually kept **00:00–15:00 local** — seven hours
+of guaranteed closed-park zeros — and discarded the entire **16:00–23:00 evening peak**.
+
+It corrupted the features too: `dayofweek` and `is_weekend` came from UTC, so Sunday
+20:00 local was labelled Monday (weekend flag lost) and Friday 20:00 was labelled
+Saturday (weekend flag invented) — the most predictive feature in the model, wrong at
+exactly the hours that matter.
+
+```
+                     v1 (UTC bug)    v2 (park-local)
+rows kept                 423,947            393,821
+mean wait (min)              7.06              15.30
+zeros                       69.8%              36.8%
+wait-minute mass            47.1%              95.0%   ← more than half the signal was gone
+Disneyland peak      "UTC hour 20"     local hour 12
+```
+
+After the fix the daily profile is finally a theme park: ramp from 08:00, plateau
+11:00–19:00, decay to close.
+
+```
+python scripts/validate_timezone_fix.py     # runs both filters side by side
+```
+
+### 2 · Two different ride-name sanitizers
+
+Training wrote artefacts with `re.sub(r'[^\w\s-]','',name)`. Evaluation looked them up
+with `name.replace(' ','_')`. Any attraction containing an apostrophe, colon, comma, `!`
+or `&` produced a path that did not exist, hit a bare `except: pass`, and was dropped
+from the metrics.
+
+**43 of 120 rides vanished** — and they were the marquee ones:
+
+| | Rides | Mean wait |
+|---|---|---|
+| Included in v1 metrics | 77 | 5.88 min |
+| **Silently dropped** | **43** | **10.03 min** |
+
+Rise of the Resistance, Guardians — Mission: BREAKOUT!, Toy Story Midway Mania!, Soarin'
+Around the World, Peter Pan's Flight, Tiana's Bayou Adventure. Every published accuracy
+figure was measured with the hard cases removed.
+
+The fix is structural, not a patched string: `themepark.naming.canonical_ride_key` is the
+single implementation, models hold their members in a dict keyed by it, and
+**`coverage` is now a gated metric** — a model that cannot serve 95% of the fleet is
+ineligible for promotion, and the scoring job fails rather than publishing a partial
+forecast.
+
+---
+
+## Architecture
+
+```
+┌──────────────────────────┐
+│  Upstream Postgres (AWS) │  live, read-only
+└────────────┬─────────────┘
+             │ incremental read, watermark on wait_time_id
+             ▼
+┌──────────────────────────────────────────────────────┐
+│  GitHub Actions — collect.yml   (cron */30)          │
+│  psycopg → Parquet → Databricks SDK files.upload     │
+└────────────┬─────────────────────────────────────────┘
+             ▼
+┌──────────────────────────────────────────────────────┐
+│  DATABRICKS  (serverless, Unity Catalog, Delta)      │
+│                                                      │
+│   /Volumes/themepark/bronze/landing/                 │
+│        └─► bronze.wait_times_raw    append-only      │
+│              └─► silver.wait_times  UTC→local, 30min │
+│                                                      │
+│   ══ WEEKLY WORKFLOW — Sunday 06:00 UTC ══           │
+│     train   4 candidates → MLflow                    │
+│     gate    re-score incumbent, promote or decline   │
+│     score   next 7d × 30min × all rides              │
+│     verify  last week's forecast vs actuals          │
+└────────────┬─────────────────────────────────────────┘
+             │ GitHub Actions pulls (Databricks has no
+             │ outbound internet on the free tier)
+             ▼
+   ┌──────────────────┐        ┌──────────────────┐
+   │  Supabase        │        │  GitHub Pages    │
+   │  PostgREST API   │        │  dashboard       │
+   └────────┬─────────┘        └──────────────────┘
+            └──► time-dependent routing optimiser
+```
+
+**Why ingestion lives in GitHub Actions.** Databricks Free Edition restricts outbound
+internet to an allowlist, so a Databricks job cannot dial the upstream database or
+Supabase. Every network hop is therefore inbound to Databricks, brokered by a runner. On
+a paid workspace this would be a Lakeflow pipeline — though separating ingestion from
+compute is defensible regardless, since an ingestion failure then cannot consume training
+capacity.
+
+---
+
+## The promotion gate
+
+The part that makes this a deployment rather than a cron entry. Every Sunday all four
+candidates are retrained **and the incumbent champion is re-scored on the same fresh
+holdout** — comparing against its stored metrics from a previous week would let a quiet
+week masquerade as a model improvement.
+
+A challenger is promoted only if **all** hold:
+
+| Check | Threshold | Why |
+|---|---|---|
+| `coverage` | ≥ 95% of the fleet | the defect-2 tripwire — accuracy must not improve by shrinking the population |
+| beats baseline | strictly | if nothing beats a per-ride mean, something upstream is broken; the run **fails** rather than shipping |
+| MAE improvement | ≥ 2% | a smaller gain is holdout noise, and churning the champion invalidates the accuracy history |
+| high-wait RMSE | ≤ 105% of incumbent | better on average but worse where queues are long is not better |
+
+Every decision — promoted or declined — is written to `gold.promotion_log` and shown on
+the dashboard. *A gate that has never said no is not a gate*, so the test suite asserts
+refusal in five distinct scenarios.
+
+---
+
+## REST API
+
+PostgREST exposes the forecast table directly — there is no API service in this repo to
+deploy, monitor or patch.
+
+```bash
+curl "$SUPABASE_URL/rest/v1/predictions?\
+park_name=eq.Disneyland&\
+ts_local=gte.2026-08-24T09:00:00&ts_local=lt.2026-08-24T21:00:00&\
+select=ride_name,ts_local,predicted_wait_min,lower_bound,upper_bound&\
+order=ts_local" \
+  -H "apikey: $SUPABASE_ANON_KEY"
+```
+
+```json
+[{"ride_name": "Space Mountain", "ts_local": "2026-08-24T09:00:00",
+  "predicted_wait_min": 22, "lower_bound": 11, "upper_bound": 38}]
+```
+
+Bounds ship with every row. The consumer is a time-dependent travelling-salesman solver,
+and a route optimised on point estimates alone cannot distinguish a reliable 20-minute
+queue from a volatile one averaging the same.
+
+The anon key is read-only (RLS `SELECT` policy); the service-role key exists only in
+GitHub Secrets.
+
+---
+
+## Repository layout
+
+```
+src/themepark/          the library — imported identically by laptop, runner and Databricks
+  naming.py             canonical_ride_key — ONE implementation (kills defect 2)
+  timeutils.py          UTC → America/Los_Angeles (kills defect 1)
+  features.py           the single feature builder (was duplicated in 5 files)
+  filters.py            operating windows, in local time
+  silver.py             bronze → silver transform, shared by job and tests
+  models/               baseline · prophet_fleet · xgb_global · xgb_local_fleet
+  evaluate.py           segmented backtest scorecard
+  promote.py            the champion/challenger gate
+  score.py              7-day forecast grid
+  verify.py             production accuracy: predictions vs what happened
+  dashboard*.py         static dashboard generator
+
+jobs/                   thin entry points (Databricks tasks + runner jobs)
+.github/workflows/      collect · train · publish · ci
+databricks.yml          Asset Bundle — the weekly job as code
+infra/supabase_schema.sql
+scripts/                local_pipeline.py · validate_timezone_fix.py
+tests/                  70 tests, mostly regressions for the two defects
+legacy/v1/              superseded scripts, kept for reference
+```
+
+---
+
+## Running it
+
+```bash
+pip install -r requirements-dev.txt
+pytest -q                                    # 70 tests
+python scripts/validate_timezone_fix.py      # proves defect 1 is fixed
+python scripts/local_pipeline.py --fast      # full cycle offline, ~1 min
+python jobs/build_dashboard.py --source local --dir artifacts/local_run
+```
+
+`scripts/local_pipeline.py` is a genuine dress rehearsal: it builds silver, trains all
+four candidates, runs the gate, generates a forecast, then scores that forecast against a
+withheld future week — the same thing the scheduled job does every Sunday.
+
+**Deploying** — see [`.env.example`](.env.example) for required secrets, run
+[`infra/supabase_schema.sql`](infra/supabase_schema.sql) once, then:
+
+```bash
+databricks bundle deploy --target prod
+gh workflow run collect.yml -f drain=true    # one-time backfill
+databricks bundle run themepark_weekly
+```
+
+---
+
+## Stack
+
+**Databricks** (Unity Catalog · Delta Lake medallion · Workflows · serverless) ·
+**MLflow** (tracking · Model Registry · `@champion` alias) ·
+**GitHub Actions** (ingestion · CI · Pages) ·
+**Databricks Asset Bundles** (jobs as code) ·
+**Supabase / PostgREST** (serving + REST) ·
+Prophet · XGBoost · pandas · pytest · ruff
+
+---
+
+*Wait-time data is sourced from a partner operational database and is never committed to
+this repository. Park and attraction names are public information.*

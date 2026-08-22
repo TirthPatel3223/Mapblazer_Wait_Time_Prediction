@@ -1,0 +1,52 @@
+name: collect
+
+# Ingestion runs here rather than on Databricks because Databricks Free Edition blocks
+# outbound internet, so it cannot reach the upstream Postgres. GitHub cron is best-effort
+# and can lag under load, which is fine: the job watermarks off what actually landed
+# rather than assuming it ran on time.
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+    inputs:
+      drain:
+        description: "Loop until caught up (use for the initial backfill)"
+        type: boolean
+        default: false
+
+concurrency:
+  # Never let two collectors race for the same watermark.
+  group: collect
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install ingestion dependencies
+        # Deliberately not the full requirements file: this job never trains, so it has no
+        # need for Prophet or cmdstan, and skipping them cuts the run to well under a minute.
+        run: pip install --quiet pandas pyarrow "psycopg[binary]" databricks-sdk databricks-sql-connector requests
+
+      - name: Ingest
+        env:
+          PG_HOST: ${{ secrets.PG_HOST }}
+          PG_PORT: ${{ secrets.PG_PORT }}
+          PG_DATABASE: ${{ secrets.PG_DATABASE }}
+          PG_USER: ${{ secrets.PG_USER }}
+          PG_PASSWORD: ${{ secrets.PG_PASSWORD }}
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          DATABRICKS_WAREHOUSE_ID: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          python jobs/collect.py ${{ inputs.drain && '--drain' || '' }}

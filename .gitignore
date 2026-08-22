@@ -1,6 +1,30 @@
+# Raw data never enters the repo. The upstream extract is someone else's production data,
+# and the pipeline reads it from Postgres at runtime rather than from a checked-in file.
 data/
+*.csv
+!tests/fixtures/*.csv
+
+# Model artefacts are owned by the MLflow registry now, not git. The previous layout
+# committed 422 MB of Prophet and XGBoost JSON without LFS.
+trained_models/
+artifacts/
+mlruns/
+site/
+
+# Superseded v1 scripts, kept locally for reference only.
 old_scripts/
+Random_Scripts/
+
+# Secrets
+.env
+*.pem
+
 __pycache__/
 *.pyc
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
 .DS_Store
-Random_Scripts/
+.ipynb_checkpoints/
