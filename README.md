@@ -173,8 +173,8 @@ publish.
 
 ## Querying the forecast API
 
-    curl "$SUPABASE_URL/rest/v1/predictions?row_kind=eq.forecast&park_name=eq.Disneyland&limit=5" \
-         -H "apikey: $SUPABASE_ANON_KEY"
+    curl "https://xkwbvgfkazqgvkzqwxvg.supabase.co/rest/v1/predictions?row_kind=eq.forecast&park_name=eq.Disneyland&limit=5" \
+         -H "apikey: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inhrd2J2Z2ZrYXpxZ3ZrenF3eHZnIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4NzM1NDY2NywiZXhwIjoyMTAyOTMwNjY3fQ.WRac3sWazNU5aXzWsnL7z4UHQfGKi6b1ieKkBd-IZWE"
 
 Every forecast row carries `predicted_wait_min` with `lower_bound`/`upper_bound`
 (80 percent interval), park-local and UTC timestamps, and the run provenance columns.
