@@ -27,7 +27,9 @@ import argparse
 import json
 import logging
 import os
+import re
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -42,6 +44,17 @@ PRED_TABLE = "themepark.gold.predictions_last"
 
 CHUNK_ROWS = 5000
 PUSH_ATTEMPTS = 3
+
+# The warehouse is serverless and scales to zero, so the weekly run is always a cold
+# start. Give it room to come up, then give the driver a few tries at the door.
+WAREHOUSE_START_TIMEOUT = 600
+WAREHOUSE_POLL_SECONDS = 15
+CONNECT_ATTEMPTS = 5
+
+# The wall clock gold.predictions.ts_local is written in. The warehouse round trip
+# relabels those naive timestamps as UTC, so the tzinfo that comes back is a label, not
+# a conversion: strip it rather than convert it.
+PARK_TZ = "America/Los_Angeles"
 
 
 def load_env(path: Path) -> None:
@@ -73,27 +86,116 @@ def require_env(*names: str) -> dict[str, str]:
     return values
 
 
+def normalize_warehouse_id(raw: str) -> str:
+    """A warehouse id is 16 hex characters. Accept it bare, as a pasted
+    `sql/warehouses/<id>` path, or as a full workspace URL.
+
+    Checking the shape here is worth the few lines: a wrong id is not rejected at the
+    door but deep inside a Thrift call, as an HTTP 400 indistinguishable from the one a
+    warehouse that cannot be provisioned returns. Those two need different responses, so
+    they should not arrive looking the same.
+    """
+    candidate = raw.strip().split("?")[0].rstrip("/").rsplit("/", 1)[-1].lower()
+    # Exactly 16 hex, nothing salvaged from a longer string: guessing which characters of
+    # a malformed value were meant to be the id is how you end up querying the wrong one.
+    if not re.fullmatch(r"[0-9a-f]{16}", candidate):
+        raise SystemExit(
+            f"DATABRICKS_WAREHOUSE_ID={raw!r} is not a warehouse id: expected 16 hex "
+            "characters, optionally as sql/warehouses/<id>."
+        )
+    return candidate
+
+
+def wake_warehouse(host: str, token: str, warehouse_id: str) -> None:
+    """Start the warehouse over REST and wait for RUNNING before the driver opens a session.
+
+    A serverless warehouse that scales to zero is normally *not* running, and while the
+    control plane cannot yet provision one it answers `BAD_REQUEST: Cannot create the
+    resource, please try again later`. The SQL driver classifies that as non-retryable
+    and gives up in under a second of its 900s budget -- exactly backwards for a resource
+    whose resting state is "off". Starting it here turns that race into a wait.
+    """
+    import requests
+
+    api = f"https://{host}/api/2.0/sql/warehouses/{warehouse_id}"
+    headers = {"Authorization": f"Bearer {token}"}
+
+    def start() -> None:
+        r = requests.post(f"{api}/start", headers=headers, timeout=60)
+        if r.status_code in (401, 403, 404):
+            raise SystemExit(
+                f"cannot start warehouse {warehouse_id}: HTTP {r.status_code} "
+                f"{r.text[:300]}"
+            )
+        if r.status_code >= 400:
+            # Already RUNNING or STARTING comes back as INVALID_STATE. The poll settles it.
+            log.info("warehouse start returned HTTP %d; polling state anyway", r.status_code)
+
+    start()
+    deadline = time.time() + WAREHOUSE_START_TIMEOUT
+    state = None
+    while time.time() < deadline:
+        info = requests.get(api, headers=headers, timeout=60)
+        info.raise_for_status()
+        state = info.json().get("state")
+        if state == "RUNNING":
+            log.info("warehouse %s is running", warehouse_id)
+            return
+        if state in ("STOPPED", "STOPPING"):
+            log.warning("warehouse %s is %s; asking it to start again", warehouse_id, state)
+            start()
+        else:
+            log.info("warehouse %s is %s; waiting", warehouse_id, state)
+        time.sleep(WAREHOUSE_POLL_SECONDS)
+    raise SystemExit(
+        f"warehouse {warehouse_id} did not reach RUNNING within {WAREHOUSE_START_TIMEOUT}s "
+        f"(last state {state}). If it never starts, the workspace cannot provision compute "
+        "at all -- check the Databricks usage page before looking at this pipeline."
+    )
+
+
 def fetch_from_warehouse() -> tuple[pd.DataFrame, pd.DataFrame]:
     from databricks import sql as dbsql
 
     env = require_env("DATABRICKS_HOST", "DATABRICKS_TOKEN", "DATABRICKS_WAREHOUSE_ID")
     host = env["DATABRICKS_HOST"].removeprefix("https://").removeprefix("http://").rstrip("/")
-    # Accept either the bare warehouse id or a pasted path like sql/warehouses/<id>.
-    warehouse_id = env["DATABRICKS_WAREHOUSE_ID"].strip("/").split("/")[-1]
-    # One connection, both queries back to back: every warehouse query is a cold start
-    # on the free tier, so batch them.
-    with dbsql.connect(
-        server_hostname=host,
-        http_path=f"/sql/1.0/warehouses/{warehouse_id}",
-        access_token=env["DATABRICKS_TOKEN"],
-    ) as conn:
-        with conn.cursor() as cur:
-            cur.execute(f"SELECT * FROM {KPI_TABLE}")
-            kpis = cur.fetchall_arrow().to_pandas()
-            cur.execute(f"SELECT * FROM {PRED_TABLE}")
-            preds = cur.fetchall_arrow().to_pandas()
-    log.info("fetched %d KPI rows, %d prediction rows from the warehouse", len(kpis), len(preds))
-    return kpis, preds
+    warehouse_id = normalize_warehouse_id(env["DATABRICKS_WAREHOUSE_ID"])
+    token = env["DATABRICKS_TOKEN"]
+
+    wake_warehouse(host, token, warehouse_id)
+
+    last_error: Exception | None = None
+    for attempt in range(1, CONNECT_ATTEMPTS + 1):
+        try:
+            # One connection, both queries back to back: every warehouse query is a cold
+            # start on the free tier, so batch them.
+            with dbsql.connect(
+                server_hostname=host,
+                http_path=f"/sql/1.0/warehouses/{warehouse_id}",
+                access_token=token,
+            ) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(f"SELECT * FROM {KPI_TABLE}")
+                    kpis = cur.fetchall_arrow().to_pandas()
+                    cur.execute(f"SELECT * FROM {PRED_TABLE}")
+                    preds = cur.fetchall_arrow().to_pandas()
+            log.info(
+                "fetched %d KPI rows, %d prediction rows from the warehouse",
+                len(kpis),
+                len(preds),
+            )
+            return kpis, preds
+        except Exception as exc:
+            last_error = exc
+            log.warning(
+                "warehouse read attempt %d/%d failed: %s", attempt, CONNECT_ATTEMPTS, exc
+            )
+            if attempt < CONNECT_ATTEMPTS:
+                time.sleep(30 * attempt)
+    # Reading is idempotent, so retrying was free; having exhausted it, say so plainly.
+    raise SystemExit(
+        f"could not read the serving tables after {CONNECT_ATTEMPTS} attempts: {last_error}"
+    )
 
 
 def fetch_from_parquet(directory: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -101,6 +203,16 @@ def fetch_from_parquet(directory: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
     preds = pd.read_parquet(directory / "themepark_gold_predictions_last.parquet")
     log.info("read %d KPI rows, %d prediction rows from %s", len(kpis), len(preds), directory)
     return kpis, preds
+
+
+def park_now() -> pd.Timestamp:
+    """Park-local wall time, tz-naive: the frame ts_local is written in."""
+    return pd.Timestamp(datetime.now(timezone.utc)).tz_convert(PARK_TZ).tz_localize(None)
+
+
+def as_naive(value) -> pd.Timestamp:
+    ts = pd.Timestamp(value)
+    return ts.tz_localize(None) if ts.tzinfo is not None else ts
 
 
 def validate_pair(kpis: pd.DataFrame, preds: pd.DataFrame) -> None:
@@ -126,6 +238,16 @@ def validate_pair(kpis: pd.DataFrame, preds: pd.DataFrame) -> None:
         forecast["ts_local"].min(),
         forecast["ts_local"].max(),
     )
+    # The serving tables can be perfectly self-consistent and still describe a week that
+    # has already happened -- which is what a silently missing weekly run looks like from
+    # here. Republishing that would leave the dashboard confidently forecasting the past.
+    horizon_end = as_naive(forecast["ts_local"].max())
+    if horizon_end <= park_now():
+        raise SystemExit(
+            f"refusing to publish: the forecast window ended {horizon_end} and is "
+            "entirely in the past. The weekly Databricks job has not produced a new "
+            "serving set; check that it ran."
+        )
 
 
 def to_records(df: pd.DataFrame) -> list[dict]:

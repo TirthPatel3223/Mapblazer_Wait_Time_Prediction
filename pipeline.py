@@ -93,6 +93,11 @@ MIN_ATTRACTIONS = 50
 MAX_ZERO_PCT = 75.0
 MIN_ROW_RATIO_VS_LAST = 0.5
 MIN_FORECAST_RIDE_COVERAGE = 0.95
+# How old the newest observation may be before the run stops trying to learn from it.
+# Ingestion runs hourly and the model retrains weekly, so past a day and a half the
+# "new" week is a copy of the last one: retraining on it costs three model fits and
+# teaches nothing. Module-level so tests can move it.
+MAX_INPUT_AGE_HOURS = 36.0
 
 MODEL_PROPHET = "prophet_fleet"
 MODEL_XGB_GLOBAL = "xgb_global"
@@ -128,6 +133,9 @@ TEMPORAL_FEATURES = [
 STATUS_FRESH = "fresh_model"
 STATUS_KEPT = "kept_previous_model"
 STATUS_FALLBACK = "fallback_after_failure"
+# Ingestion stopped, so nothing was retrained: the serving model scored the coming week
+# and gold was promoted anyway, to keep the forecast window live.
+STATUS_STALE_INPUT = "stale_input"
 
 
 class PipelineError(Exception):
@@ -253,6 +261,15 @@ def now_local() -> pd.Timestamp:
 
 def make_run_id() -> str:
     return utcnow().strftime("%Y%m%dT%H%M%SZ")
+
+
+def data_age_hours(silver: pd.DataFrame) -> float:
+    """Hours between the newest silver observation and now, both park-local and tz-naive
+    (the same pair check_silver compares). This is the ingestion feed's pulse: it grows
+    without bound once the EC2 agent stops pushing bronze."""
+    if silver.empty:
+        return float("inf")
+    return float((now_local() - silver["ts_local"].max()) / pd.Timedelta(hours=1))
 
 
 _PUNCT = re.compile(r"[^\w\s-]")
@@ -1227,6 +1244,124 @@ def drop_current_tables() -> None:
             log.error("failed to drop %s: %s", table + CURRENT, exc)
 
 
+def reload_serving_model(previous: dict | None, why: str):
+    """Reload the model recorded in serving.json, refusing on any disagreement between
+    that pointer and gold.kpis_last. `why` names what the caller was about to do: every
+    refusal here has to say what it stopped, because serving an unvalidated model is the
+    failure mode this pipeline exists to prevent."""
+    pointer = read_serving_pointer()
+    if pointer is None:
+        raise PipelineError(
+            f"{why} but serving.json is missing or unreadable; refusing to guess "
+            "(unconditional promotion is the failure mode this pipeline exists to prevent)"
+        )
+    if previous and previous.get("run_id") and previous["run_id"] != pointer["run_id"]:
+        raise PipelineError(
+            f"kpis_last.run_id {previous['run_id']} disagrees with serving.json "
+            f"run_id {pointer['run_id']}; refusing to serve mismatched model and KPIs"
+        )
+    model, _manifest = load_serving_model(pointer)
+    if model is None:
+        raise PipelineError(
+            f"could not reload the previous serving model from run {pointer['run_id']}; "
+            "job fails rather than promoting unvalidated output"
+        )
+    return pointer, model
+
+
+def carry_forward_gold() -> tuple[pd.DataFrame, pd.DataFrame]:
+    """The gold rows that stay true whenever the serving model does not change: its
+    measured KPIs, and the backtest rows those KPIs were measured on. Re-deriving either
+    would only restate what _last already holds."""
+    prev_kpis = read_table(KPI_TABLE + LAST)
+    kpi_df = prev_kpis[["model", "kpi_name", "kpi_value", "is_serving", "trained_at"]].copy()
+    prev_preds = read_table(PRED_TABLE + LAST)
+    backtest = prev_preds[prev_preds["row_kind"] == "backtest"][
+        [
+            "row_kind", "park_name", "ride_key", "ride_name", "ts_local", "ts_utc",
+            "predicted_wait_min", "lower_bound", "upper_bound", "actual_wait_min",
+            "error_min", "model_name",
+        ]
+    ].copy()
+    return kpi_df, backtest
+
+
+def write_and_promote(kpi_df: pd.DataFrame, preds_df: pd.DataFrame, n_active: int) -> None:
+    """Write gold _current, check it, and only then promote all three tables. Every path
+    that publishes goes through here, so no path can publish on weaker checks."""
+    write_table(KPI_TABLE + CURRENT, kpi_df)
+    write_table(PRED_TABLE + CURRENT, preds_df)
+    failures = check_kpis(kpi_df) + check_predictions(preds_df, n_active)
+    if failures:
+        for f in failures:
+            log.error("gold check failed: %s", f)
+        raise QualityCheckError("; ".join(failures))
+    log.info("gold checks passed")
+    for table in (SILVER_TABLE, KPI_TABLE, PRED_TABLE):
+        promote_table(table + CURRENT, table + LAST)
+
+
+def run_forecast_only(run_id: str, silver: pd.DataFrame, age_hours: float) -> dict:
+    """Ingestion has stopped, so there is nothing new to learn from. Score the coming week
+    with the model already serving and promote gold anyway: the forecast window stays live
+    for the dashboard and the API, and run_status says why it is not a normal run.
+
+    Nothing is retrained and serving.json is untouched. The only thing that genuinely
+    moves is the forecast grid, which is a function of the clock rather than of the stale
+    rows -- so a forecast built here is exactly as good as the serving model is, and no
+    worse for the input being old. What it cannot do is notice that the world changed."""
+    log.warning(
+        "newest observation is %.1f hours old (limit %.1f): the ingestion feed has "
+        "stopped. Skipping training and re-scoring the forecast window with the "
+        "serving model.",
+        age_hours,
+        MAX_INPUT_AGE_HOURS,
+    )
+    previous = previous_serving_from_kpis()
+    pointer, serving_model = reload_serving_model(
+        previous, "the input data is stale so the serving model has to be reused"
+    )
+    kpi_df, backtest = carry_forward_gold()
+    forecast = build_forecast(serving_model, silver, now_local())
+
+    kpi_df = stamp(kpi_df, pointer["run_id"], STATUS_STALE_INPUT, pointer["trained_at"])
+    preds_df = stamp(
+        pd.concat([forecast, backtest], ignore_index=True),
+        pointer["run_id"],
+        STATUS_STALE_INPUT,
+        pointer["trained_at"],
+    )
+
+    n_active = silver.groupby(["park_name", "ride_key"]).ngroups
+    write_and_promote(kpi_df, preds_df, n_active)
+    log.warning(
+        "run %s promoted a forecast-only refresh: serving model %s from run %s, %d "
+        "forecast rows. No model was trained and serving.json is unchanged.",
+        run_id,
+        pointer["model_name"],
+        pointer["run_id"],
+        len(forecast),
+    )
+
+    return {
+        "run_id": run_id,
+        "run_status": STATUS_STALE_INPUT,
+        "serving_model": serving_model.family,
+        "serving_run_id": pointer["run_id"],
+        "new_model_mae": None,
+        "previous_mae": round(previous["mae"], 3) if previous else None,
+        "decision": (
+            f"input is {age_hours:.1f}h old (limit {MAX_INPUT_AGE_HOURS:.0f}h); skipped "
+            "training and re-scored the forecast window with the serving model"
+        ),
+        "silver_rows": len(silver),
+        "attractions": n_active,
+        "forecast_rows": int((preds_df["row_kind"] == "forecast").sum()),
+        "backtest_rows": int((preds_df["row_kind"] == "backtest").sum()),
+        "input_age_hours": round(age_hours, 1),
+    }
+
+
 def run_pipeline(run_id: str) -> dict:
     ensure_workspace()
 
@@ -1243,6 +1378,16 @@ def run_pipeline(run_id: str) -> dict:
             log.error("silver check failed: %s", f)
         raise QualityCheckError("; ".join(failures))
     log.info("silver checks passed")
+
+    # ---- Step 1b: is there anything new to learn from? ---------------------------
+    # Shape checks pass on stale data -- the row count is unchanged, so nothing above
+    # notices. Ask the one question they do not: how old is the newest row? Checked
+    # here, before the three model fits, because those fits are the expensive part and
+    # a stale week teaches them nothing.
+    age_hours = data_age_hours(silver)
+    if age_hours > MAX_INPUT_AGE_HOURS:
+        return run_forecast_only(run_id, silver, age_hours)
+    log.info("newest observation is %.1f hours old", age_hours)
 
     # ---- Step 2: train -----------------------------------------------------------
     train_df, test_df = chrono_split(silver)
@@ -1309,58 +1454,24 @@ def run_pipeline(run_id: str) -> dict:
         )
         model_trained_at = serving_model.trained_at
     else:
-        pointer = read_serving_pointer()
-        if pointer is None:
-            raise PipelineError(
-                "promotion gate chose the previous model but serving.json is missing or "
-                "unreadable; refusing to guess (unconditional promotion is the failure "
-                "mode this pipeline exists to prevent)"
-            )
-        if previous and previous.get("run_id") and previous["run_id"] != pointer["run_id"]:
-            raise PipelineError(
-                f"kpis_last.run_id {previous['run_id']} disagrees with serving.json "
-                f"run_id {pointer['run_id']}; refusing to serve mismatched model and KPIs"
-            )
-        serving_model, manifest = load_serving_model(pointer)
-        if serving_model is None:
-            raise PipelineError(
-                f"could not reload the previous serving model from run {pointer['run_id']}; "
-                "job fails rather than promoting unvalidated output"
-            )
+        pointer, serving_model = reload_serving_model(
+            previous, "the promotion gate chose the previous model"
+        )
         run_status = STATUS_KEPT
         serving_run_id = pointer["run_id"]
         model_trained_at = pointer["trained_at"]
         # Previous KPI values keep serving: the model has not changed, so its measured
         # KPIs are still the correct ones to display.
-        prev_kpis = read_table(KPI_TABLE + LAST)
-        kpi_df = prev_kpis[["model", "kpi_name", "kpi_value", "is_serving", "trained_at"]].copy()
+        kpi_df, backtest = carry_forward_gold()
         forecast = build_forecast(serving_model, silver, start_local)
-        prev_preds = read_table(PRED_TABLE + LAST)
-        backtest = prev_preds[prev_preds["row_kind"] == "backtest"][
-            [
-                "row_kind", "park_name", "ride_key", "ride_name", "ts_local", "ts_utc",
-                "predicted_wait_min", "lower_bound", "upper_bound", "actual_wait_min",
-                "error_min", "model_name",
-            ]
-        ].copy()
 
     # ---- Step 4: gold tables -----------------------------------------------------
     kpi_df = stamp(kpi_df, serving_run_id, run_status, model_trained_at)
     preds_df = stamp(pd.concat([forecast, backtest], ignore_index=True), serving_run_id, run_status, model_trained_at)
-    write_table(KPI_TABLE + CURRENT, kpi_df)
-    write_table(PRED_TABLE + CURRENT, preds_df)
 
     # ---- Step 5b: gold checks, then promote --------------------------------------
     n_active = silver.groupby(["park_name", "ride_key"]).ngroups
-    failures = check_kpis(kpi_df) + check_predictions(preds_df, n_active)
-    if failures:
-        for f in failures:
-            log.error("gold check failed: %s", f)
-        raise QualityCheckError("; ".join(failures))
-    log.info("gold checks passed")
-
-    for table in (SILVER_TABLE, KPI_TABLE, PRED_TABLE):
-        promote_table(table + CURRENT, table + LAST)
+    write_and_promote(kpi_df, preds_df, n_active)
 
     if ship_new:
         write_serving_pointer(
