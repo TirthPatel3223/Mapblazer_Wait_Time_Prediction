@@ -120,6 +120,14 @@ decision rather than a data one. The feed has 30-minute granularity and the mode
 weekly, so nothing downstream notices; but if this ever fed a real-time consumer, the
 warehouse round trip per batch would be the first thing to replace.
 
+The quota is not theoretical. Ingestion stopped writing bronze on 2026-08-25; the weekly
+job then never started on 2026-08-30, and the publish workflow could not open a warehouse
+session at all (`BAD_REQUEST: Cannot create the resource, please try again later`) --
+every symptom of a workspace that cannot provision serverless compute, with ~24 warehouse
+wake-ups a day as the plausible cause. The pipeline now degrades rather than stopping
+(see issue 14), but nothing in it can make compute available: widening the timer from 1h
+to 6h is the lever, and the unit file already says so.
+
 ### 12. Point forecasts are precomputed, not served on demand
 
 The consumer is a time-dependent routing solver, which needs the entire cost surface
@@ -130,11 +138,26 @@ to stay warm. The cost is that an intra-week correction requires a manual job ru
 ### 13. Alerting is email plus visible run provenance
 
 GitHub emails on workflow failure, Databricks emails on job failure, and the dashboard
-carries the run id, the run status (`fresh_model`, `kept_previous_model`,
+carries the run id, the run status (`fresh_model`, `kept_previous_model`, `stale_input`,
 `fallback_after_failure`) and the publish timestamp, so a fallback week is visibly a
 fallback. There is no paging and no on-call. For a system whose worst failure mode is
 serving last week's forecast for another week, that is proportionate — but it is the
 first thing that would change if anything depended on this operationally.
+
+The gap this does not cover: a weekly job that never *starts* sends no failure email,
+because nothing failed. That is why `publish.py` checks the forecast window rather than
+trusting the tables to be recent — an elapsed window is the only signal a run that never
+happened leaves behind.
+
+### 14. A stale-input week is silent about what it does not know
+
+When ingestion stops, the run skips training and re-scores the coming week with the
+serving model (`run_status` = `stale_input`), so the forecast window stays live. What it
+publishes is a model's opinion of a week it has no recent data for: as good as the model
+was, and blind to anything that has changed since. The dashboard flags the status and the
+KPI tiles still show the values measured when the model was trained, which is honest but
+easy to skim past. A real fix is an accuracy backfill that scores those forecasts against
+actuals once ingestion recovers, so a stale week is judged rather than just labelled.
 
 ---
 

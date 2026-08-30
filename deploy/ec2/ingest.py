@@ -36,6 +36,7 @@ import argparse
 import io
 import logging
 import os
+import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -231,6 +232,26 @@ class SourceDatabase:
 # ------------------------------------------------------------------------------------
 
 
+def normalize_warehouse_id(raw: str) -> str:
+    """A warehouse id is 16 hex characters. Accept it bare, as a pasted
+    `sql/warehouses/<id>` path, or as a full workspace URL.
+
+    A wrong id is otherwise rejected deep inside a Thrift call, as an HTTP 400
+    indistinguishable from the one a warehouse that cannot be provisioned returns; those
+    two need different responses. Kept in step with the copy in publish.py -- this file
+    imports nothing from the repository.
+    """
+    candidate = raw.strip().split("?")[0].rstrip("/").rsplit("/", 1)[-1].lower()
+    # Exactly 16 hex, nothing salvaged from a longer string: guessing which characters of
+    # a malformed value were meant to be the id is how you end up querying the wrong one.
+    if not re.fullmatch(r"[0-9a-f]{16}", candidate):
+        raise SystemExit(
+            f"DATABRICKS_WAREHOUSE_ID={raw!r} is not a warehouse id: expected 16 hex "
+            "characters, optionally as sql/warehouses/<id>."
+        )
+    return candidate
+
+
 class Lakehouse:
     """The Databricks side: one warehouse session per run, plus volume uploads.
 
@@ -243,8 +264,7 @@ class Lakehouse:
         env = require_env(*DATABRICKS_ENV)
         self.host = env["DATABRICKS_HOST"].removeprefix("https://").removeprefix("http://").rstrip("/")
         self.token = env["DATABRICKS_TOKEN"]
-        # Accept either the bare warehouse id or a pasted path like sql/warehouses/<id>.
-        self.warehouse_id = env["DATABRICKS_WAREHOUSE_ID"].strip("/").split("/")[-1]
+        self.warehouse_id = normalize_warehouse_id(env["DATABRICKS_WAREHOUSE_ID"])
         self._conn = None
 
     def __enter__(self) -> Lakehouse:

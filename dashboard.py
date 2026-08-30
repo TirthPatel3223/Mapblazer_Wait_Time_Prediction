@@ -29,6 +29,7 @@ STATUS_LABELS = {
     "fresh_model": ("Fresh model", "good"),
     "kept_previous_model": ("Kept previous model", "neutral"),
     "fallback_after_failure": ("Fallback after a failed run", "serious"),
+    "stale_input": ("Stale input - forecast only", "serious"),
 }
 
 TILE_SPECS = [

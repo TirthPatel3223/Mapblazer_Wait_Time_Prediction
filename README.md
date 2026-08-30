@@ -97,6 +97,21 @@ by at least 1 percent. Otherwise the incumbent is reloaded from disk and
 re-scored over the upcoming week, so the forecast window is fresh either way. Rolling
 back is editing `serving.json` to an earlier `run_id`.
 
+### When ingestion stops
+
+Bronze going quiet is not a failure the shape checks can see: the row count is unchanged,
+so silver validates and the run would happily retrain on last week's data and report
+success. So the run asks the one question the checks do not -- how old is the newest
+observation? Past `MAX_INPUT_AGE_HOURS` (36) it skips training entirely, re-scores the
+coming week with the model already serving, and promotes gold as usual. The forecast
+window stays live for the dashboard and the API, `run_status` is `stale_input` so the
+dashboard says why, and no compute is spent fitting three models on a repeat of last
+week. The check runs before training because those fits are the expensive part.
+
+This keeps the forecast current; it cannot keep it correct. A model scoring a week it has
+no recent data for is exactly as good as it was when it was trained, and blind to
+anything that changed since.
+
 ### Failure behavior
 
 Any failure -- a quality check, a training error, unreadable bronze -- drops the
@@ -104,9 +119,14 @@ Any failure -- a quality check, a training error, unreadable bronze -- drops the
 previous serving model (validated against the same prediction checks) so the dashboard
 never serves a forecast window that has slid into the past, and still fails the job
 so the failure alerts. Both gold tables carry `run_id`, `run_status` (`fresh_model`,
-`kept_previous_model`, or `fallback_after_failure`) and `generated_at`, so a fallback
-week is visibly a fallback. A first-ever run with nothing to fall back to changes
-nothing and says so.
+`kept_previous_model`, `stale_input`, or `fallback_after_failure`) and `generated_at`, so
+a fallback week is visibly a fallback. A first-ever run with nothing to fall back to
+changes nothing and says so.
+
+Publishing has the matching guard on the other side: `publish.py` refuses a serving pair
+whose forecast window has already elapsed. A weekly job that never started leaves gold
+perfectly self-consistent and simply old, which is otherwise indistinguishable from a
+good week until someone reads the dates.
 
 ### Serving
 
